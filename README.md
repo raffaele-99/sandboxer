@@ -31,7 +31,8 @@ This repository includes a Python `agent-shell` command that generates per-run D
 3. Installs requested packages with the image's native package manager.
 4. Optionally enables passwordless `sudo` for user `agent`.
 5. Mounts agent auth (`~/.codex` or `~/.claude`) directly into `/home/agent`.
-6. Starts `docker run --rm -it` and drops you into `/workspace`.
+6. Sets a colored Bash prompt (`user@host:path`) for interactive shells.
+7. Starts `docker run --rm -it` and drops you into `/workspace`.
 
 ### Config defaults
 Run `./agent-shell --config` to open an interactive setup wizard.  
