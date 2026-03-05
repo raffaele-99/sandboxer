@@ -1,0 +1,37 @@
+services:
+  codex-agent-daily:
+    build:
+      context: ../..
+      dockerfile: docker/agent-daily-ubuntu/Dockerfile
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: quadrafuzz-agent-daily-ubuntu:latest
+    working_dir: /workspace
+    tty: true
+    stdin_open: true
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_DIR:?set WORKSPACE_DIR to an absolute host path}
+        target: /workspace
+      - type: volume
+        source: codex-home
+        target: /home/agent/.codex
+    tmpfs:
+      - /tmp:exec,mode=1777,size=512m
+      - /run:size=64m
+    environment:
+      - TERM=xterm-256color
+      - HOME=/home/agent
+      - CODEX_HOME=/home/agent/.codex
+      - OPENAI_API_KEY
+
+volumes:
+  codex-home:
