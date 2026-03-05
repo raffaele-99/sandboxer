@@ -19,8 +19,9 @@ This repository now includes a Python `agent-shell` command that generates per-r
 
 ### Usage
 ```bash
-./agent-shell -a codex -os ubuntu:24.04 -p ghidra radare2 -m . --allow-sudo
-./agent-shell -a claude -os alpine:3.20 -p gdb strace -m .
+./agent-shell codex -os ubuntu:24.04 -p ghidra radare2 -m . --allow-sudo
+./agent-shell claude -os alpine:3.20 -p gdb strace -m .
+./agent-shell -m . -p ripgrep -a codex
 ```
 
 ### What it does

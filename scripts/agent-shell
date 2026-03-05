@@ -200,7 +200,17 @@ def make_parser() -> argparse.ArgumentParser:
             "in a fresh sandbox."
         ),
     )
-    parser.add_argument("-a", "--agent", required=True, help="Agent to run: codex | claude")
+    parser.add_argument(
+        "agent",
+        nargs="?",
+        help="Agent to run positionally: codex | claude",
+    )
+    parser.add_argument(
+        "-a",
+        "--agent",
+        dest="agent_flag",
+        help="Agent to run (optional if provided positionally).",
+    )
     parser.add_argument(
         "-o",
         "-os",
@@ -322,8 +332,16 @@ def main(argv: list[str]) -> int:
     parser = make_parser()
     args = parser.parse_args(cli_args)
 
+    selected_agent = args.agent_flag or args.agent
+    if args.agent and args.agent_flag and args.agent != args.agent_flag:
+        parser.error(
+            f"conflicting agent values: positional '{args.agent}' vs --agent '{args.agent_flag}'"
+        )
+    if not selected_agent:
+        parser.error("agent is required (use positional `agent-shell codex` or -a codex)")
+
     try:
-        adapter = normalize_agent(args.agent)
+        adapter = normalize_agent(selected_agent)
     except ValueError as err:
         parser.error(str(err))
 
