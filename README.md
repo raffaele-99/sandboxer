@@ -11,6 +11,17 @@ See each directory's `README.md` for build and run instructions.
 ## MVP: `agent-shell` (Python + Docker)
 This repository includes a Python `agent-shell` command that generates per-run Dockerfiles, builds local images, and launches an interactive container immediately.
 
+### Install
+With `uv`:
+```bash
+uv tool install --from . agent-shell
+```
+
+Upgrade after pulling new commits:
+```bash
+uv tool upgrade --from . agent-shell
+```
+
 ### Prerequisites
 - Docker engine available from your shell (`docker info` must work).
 - API key in your shell:
@@ -26,7 +37,7 @@ This repository includes a Python `agent-shell` command that generates per-run D
 ```
 
 ### What it does
-1. Generates a Dockerfile in `.agent-shell/dockerfiles/` for the selected `--os`.
+1. Generates a Dockerfile in `~/.cache/agent-shell/dockerfiles/` (or `$XDG_CACHE_HOME/agent-shell/dockerfiles/`) for the selected `--os`.
 2. Builds/reuses a local Docker image keyed by agent + OS + package set.
 3. Installs requested packages with the image's native package manager.
 4. Optionally enables passwordless `sudo` for user `agent`.

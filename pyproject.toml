@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.26.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-shell"
+version = "0.1.0"
+description = "Ephemeral Docker agent shell with dynamic OS/package setup."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+agent-shell = "agent_shell.cli:entrypoint"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_shell"]
