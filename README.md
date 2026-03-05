@@ -22,6 +22,7 @@ This repository includes a Python `agent-shell` command that generates per-run D
 ./agent-shell codex -os ubuntu:24.04 -p ghidra radare2 -m . --allow-sudo
 ./agent-shell claude -os alpine:3.20 -p gdb strace -m .
 ./agent-shell -m . -p ripgrep -a codex
+./agent-shell --config
 ```
 
 ### What it does
@@ -31,6 +32,14 @@ This repository includes a Python `agent-shell` command that generates per-run D
 4. Optionally enables passwordless `sudo` for user `agent`.
 5. Mounts agent auth (`~/.codex` or `~/.claude`) directly into `/home/agent`.
 6. Starts `docker run --rm -it` and drops you into `/workspace`.
+
+### Config defaults
+Run `./agent-shell --config` to open an interactive setup wizard.  
+Config file path: `~/.config/agent-shell/config.yml`
+
+Supported keys:
+- `default_agent`: `codex`, `claude`, or `null`
+- `default_allow_sudo`: `true` or `false`
 
 ### Current support
 - Supported agents: `codex`, `claude`.
