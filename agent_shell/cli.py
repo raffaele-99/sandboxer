@@ -738,7 +738,8 @@ def main(argv: list[str]) -> int:
     print(f"  Workspace: {workspace} -> /workspace ({ws_mode})")
     print(f"  Sudo: {'enabled' if resolved_allow_sudo else 'disabled'}")
     try:
-        os.execvp(run_cmd[0], run_cmd)
+        result = subprocess.run(run_cmd)
+        return result.returncode
     except OSError as exc:
         eprint(f"error: failed to start docker run: {exc}")
         return 1
