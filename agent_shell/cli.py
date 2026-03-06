@@ -220,6 +220,7 @@ def load_config(path: Path) -> dict[str, object]:
         "default_allow_sudo": DEFAULT_ALLOW_SUDO,
         "default_network": "none",
         "default_auto": False,
+        "default_read_only_workspace": False,
     }
     if not path.exists():
         return config
@@ -258,6 +259,12 @@ def load_config(path: Path) -> dict[str, object]:
                 eprint(f"warning: ignoring invalid default_auto in {path}: {raw}")
             else:
                 config["default_auto"] = parsed
+        elif key == "default_read_only_workspace":
+            parsed = parse_bool(raw)
+            if parsed is None:
+                eprint(f"warning: ignoring invalid default_read_only_workspace in {path}: {raw}")
+            else:
+                config["default_read_only_workspace"] = parsed
 
     return config
 
@@ -269,6 +276,7 @@ def write_config(path: Path, config: dict[str, object]) -> None:
     allow_sudo = bool(config.get("default_allow_sudo", False))
     network = config.get("default_network", "none")
     auto = bool(config.get("default_auto", False))
+    ro_workspace = bool(config.get("default_read_only_workspace", False))
     rendered = "\n".join(
         [
             "# agent-shell defaults",
@@ -276,6 +284,7 @@ def write_config(path: Path, config: dict[str, object]) -> None:
             f"default_allow_sudo: {'true' if allow_sudo else 'false'}",
             f"default_network: {network}",
             f"default_auto: {'true' if auto else 'false'}",
+            f"default_read_only_workspace: {'true' if ro_workspace else 'false'}",
             "",
         ]
     )
@@ -350,6 +359,22 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
             selected_auto = parsed
             break
 
+        current_ro = bool(existing_config.get("default_read_only_workspace", False))
+        current_ro_label = "y" if current_ro else "n"
+        while True:
+            user_value = input(
+                f"Default read-only workspace [y/n] ({current_ro_label}): "
+            ).strip()
+            if not user_value:
+                selected_ro = current_ro
+                break
+            parsed = parse_bool(user_value)
+            if parsed is None:
+                print("Invalid value. Enter y or n.")
+                continue
+            selected_ro = parsed
+            break
+
     except (EOFError, KeyboardInterrupt):
         print("\nCancelled.")
         return 1
@@ -359,6 +384,7 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> int:
         "default_allow_sudo": selected_sudo,
         "default_network": selected_network,
         "default_auto": selected_auto,
+        "default_read_only_workspace": selected_ro,
     }
     write_config(path, new_config)
     print("Saved.")
@@ -745,7 +771,7 @@ def main(argv: list[str]) -> int:
         "--cpus=2",
         f"--network={args.network or config.get('default_network', 'none')}",
         "-v",
-        f"{workspace}:/workspace{':ro' if args.read_only_workspace else ''}",
+        f"{workspace}:/workspace{':ro' if args.read_only_workspace or config.get('default_read_only_workspace', False) else ''}",
     ]
 
     if has_auth_dir:
@@ -780,7 +806,8 @@ def main(argv: list[str]) -> int:
     print(f"Launching container {container_name}")
     print(f"  Sandbox: cap_drop=ALL, no-new-privileges, pids_limit=512, memory=4g, cpus=2")
     print(f"  Network: {network_mode}")
-    ws_mode = "read-only" if args.read_only_workspace else "read-write"
+    resolved_ro = args.read_only_workspace or config.get("default_read_only_workspace", False)
+    ws_mode = "read-only" if resolved_ro else "read-write"
     print(f"  Workspace: {workspace} -> /workspace ({ws_mode})")
     print(f"  Sudo: {'enabled' if resolved_allow_sudo else 'disabled'}")
     try:
