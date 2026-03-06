@@ -604,6 +604,9 @@ def main(argv: list[str]) -> int:
         container_name,
         "-w",
         "/workspace",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges:true",
+        "--pids-limit=512",
         "-v",
         f"{workspace}:/workspace",
     ]
