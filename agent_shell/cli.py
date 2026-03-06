@@ -612,7 +612,7 @@ def main(argv: list[str]) -> int:
     ]
 
     if has_auth_dir:
-        run_cmd.extend(["-v", f"{auth_path}:{adapter.auth_target()}"])
+        run_cmd.extend(["-v", f"{auth_path}:{adapter.auth_target()}:ro"])
 
     if has_env_auth:
         run_cmd.extend(["-e", f"{adapter.env_var}={os.environ[adapter.env_var]}"])
