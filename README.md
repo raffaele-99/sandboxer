@@ -73,6 +73,9 @@ Config file path: `~/.config/agent-shell/config.yml`
 Supported keys:
 - `default_agent`: `codex`, `claude`, or `null`
 - `default_allow_sudo`: `true` or `false`
+- `default_network`: `none`, `bridge`, or `host` (default: `none`)
+- `default_auto`: `true` or `false` (default: `false`)
+- `default_read_only_workspace`: `true` or `false` (default: `false`)
 
 ### Current support
 - Supported agents: `codex`, `claude`.
