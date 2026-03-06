@@ -30,10 +30,20 @@ uv tool upgrade --from . agent-shell
 
 ### Usage
 ```bash
+# Interactive shell
 ./agent-shell codex -os ubuntu:24.04 -p ghidra radare2 -m . --allow-sudo
 ./agent-shell claude -os alpine:3.20 -p gdb strace -m .
-./agent-shell -m . -p ripgrep -a codex
+
+# Fully autonomous mode (no shell, agent runs directly)
+./agent-shell codex -m . --auto --allow-network
+./agent-shell claude -m . --auto
+
+# Preview without executing
+./agent-shell codex -m . --dry-run
+
+# Configuration and maintenance
 ./agent-shell --config
+./agent-shell --prune
 ```
 
 ### What it does
@@ -41,9 +51,20 @@ uv tool upgrade --from . agent-shell
 2. Builds/reuses a local Docker image keyed by agent + OS + package set.
 3. Installs requested packages with the image's native package manager.
 4. Optionally enables passwordless `sudo` for user `agent`.
-5. Mounts agent auth (`~/.codex` or `~/.claude`) directly into `/home/agent`.
+5. Mounts agent auth (`~/.codex` or `~/.claude`) read-only into `/home/agent`.
 6. Sets a colored Bash prompt (`user@host:path`) for interactive shells.
-7. Starts `docker run --rm -it` and drops you into `/workspace`.
+7. Starts a hardened `docker run --rm -it` container and drops you into `/workspace`.
+
+### Container security defaults
+Every container runs with these hardening measures:
+- `--cap-drop=ALL` — no Linux capabilities
+- `--security-opt=no-new-privileges:true` — no privilege escalation
+- `--pids-limit=512` — fork bomb protection
+- `--memory=4g`, `--cpus=2` — resource limits
+- `--network=none` — no network access (override with `--allow-network` or `--network bridge`)
+- Auth directories mounted read-only
+
+A sandbox summary is printed on each launch so you can verify the boundaries.
 
 ### Config defaults
 Run `./agent-shell --config` to open an interactive setup wizard.  
@@ -62,3 +83,9 @@ Supported keys:
   - Arch (`pacman`)
   - openSUSE/SLES (`zypper`)
 - `-p/--package` values are passed directly to the selected package manager, so package names may differ across OS families.
+- `--auto` launches the agent in autonomous mode (Codex: `--full-auto`, Claude: `--dangerously-skip-permissions`).
+- `--allow-network` enables network access; `--network <mode>` for explicit control.
+- `--read-only-workspace` mounts the workspace as read-only.
+- `--agent-version <ver>` overrides the agent CLI version installed in the image.
+- `--dry-run` prints the Dockerfile and docker run command without executing.
+- `--prune` removes all cached Dockerfiles and agent-shell Docker images.
