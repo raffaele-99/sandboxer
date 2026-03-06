@@ -541,6 +541,11 @@ def main(argv: list[str]) -> int:
         if args.allow_sudo is None
         else args.allow_sudo
     )
+    if resolved_allow_sudo and args.allow_sudo is None:
+        eprint(
+            "warning: sudo enabled via config default. "
+            "Use --no-allow-sudo to disable."
+        )
 
     host_home = Path.home().resolve()
     auth_path = host_home / adapter.auth_dirname
