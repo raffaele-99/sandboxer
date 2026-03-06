@@ -31,7 +31,7 @@ class AgentAdapter:
     def required_packages(self, os_family: str) -> list[str]:
         raise NotImplementedError
 
-    def install_snippet(self) -> str:
+    def install_snippet(self, version: str | None = None) -> str:
         raise NotImplementedError
 
     def auto_args(self) -> list[str]:
@@ -48,10 +48,11 @@ class CodexAdapter(AgentAdapter):
     def auto_args(self) -> list[str]:
         return ["--full-auto"]
 
-    def install_snippet(self) -> str:
+    def install_snippet(self, version: str | None = None) -> str:
+        codex_version = version or "0.107.0"
         return textwrap.dedent(
             """\
-            ARG CODEX_VERSION=0.107.0
+            ARG CODEX_VERSION=__VERSION__
             RUN set -eux; \\
               arch="$(uname -m)"; \\
               case "${arch}" in \\
@@ -67,7 +68,7 @@ class CodexAdapter(AgentAdapter):
               chmod 0755 /usr/local/bin/codex; \\
               rm -rf "${tmpdir}"
             """
-        ).strip()
+        ).strip().replace("__VERSION__", codex_version)
 
 
 class ClaudeAdapter(AgentAdapter):
@@ -77,8 +78,11 @@ class ClaudeAdapter(AgentAdapter):
     def auto_args(self) -> list[str]:
         return ["--dangerously-skip-permissions"]
 
-    def install_snippet(self) -> str:
-        return "RUN npm install -g @anthropic-ai/claude-code"
+    def install_snippet(self, version: str | None = None) -> str:
+        pkg = "@anthropic-ai/claude-code"
+        if version:
+            pkg = f"{pkg}@{version}"
+        return f"RUN npm install -g {pkg}"
 
 
 ADAPTERS: dict[str, AgentAdapter] = {
@@ -390,6 +394,11 @@ def make_parser() -> argparse.ArgumentParser:
     parser.set_defaults(allow_sudo=None)
     parser.add_argument("--name", help="Container name (default: auto-generated).")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild image even if cached.")
+    parser.add_argument(
+        "--agent-version",
+        default=None,
+        help="Override the agent CLI version to install (e.g. 0.107.0 for Codex).",
+    )
     net_group = parser.add_mutually_exclusive_group()
     net_group.add_argument(
         "--network",
@@ -440,6 +449,7 @@ def generate_dockerfile(
     adapter: AgentAdapter,
     packages: list[str],
     allow_sudo: bool,
+    agent_version: str | None = None,
 ) -> str:
     base_packages = ["bash", "curl", "git", "ca-certificates"]
     if os_family != "alpine":
@@ -469,7 +479,7 @@ def generate_dockerfile(
     if install_packages:
         parts.extend([install_packages, ""])
 
-    parts.extend([user_setup, "", adapter.install_snippet(), ""])
+    parts.extend([user_setup, "", adapter.install_snippet(version=agent_version), ""])
 
     if allow_sudo:
         parts.extend([sudo_snippet(), ""])
@@ -606,6 +616,7 @@ def main(argv: list[str]) -> int:
         [
             f"format={CACHE_FORMAT_VERSION}",
             f"agent={adapter.name}",
+            f"agent_version={args.agent_version or 'default'}",
             f"os={args.os_image}",
             f"os_family={os_family}",
             f"sudo={int(resolved_allow_sudo)}",
@@ -627,6 +638,7 @@ def main(argv: list[str]) -> int:
         adapter=adapter,
         packages=packages,
         allow_sudo=resolved_allow_sudo,
+        agent_version=args.agent_version,
     )
     dockerfile_path.write_text(dockerfile_content, encoding="utf-8")
 
