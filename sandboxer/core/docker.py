@@ -1,0 +1,215 @@
+"""Thin subprocess wrapper around the ``docker sandbox`` CLI."""
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SandboxRow:
+    """One row from ``docker sandbox ls``."""
+
+    name: str
+    status: str
+    image: str
+
+
+class DockerSandboxError(Exception):
+    """Raised when a docker sandbox command fails."""
+
+    def __init__(self, returncode: int, stderr: str) -> None:
+        self.returncode = returncode
+        self.stderr = stderr
+        super().__init__(f"docker sandbox failed (rc={returncode}): {stderr}")
+
+
+def _run(
+    args: list[str],
+    *,
+    check: bool = True,
+    capture: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    cmd = ["docker", "sandbox", *args]
+    result = subprocess.run(
+        cmd,
+        text=True,
+        capture_output=capture,
+    )
+    if check and result.returncode != 0:
+        raise DockerSandboxError(result.returncode, result.stderr or "")
+    return result
+
+
+def _run_docker(
+    args: list[str],
+    *,
+    check: bool = True,
+    capture: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run a plain ``docker`` command (not ``docker sandbox``)."""
+    cmd = ["docker", *args]
+    result = subprocess.run(cmd, text=True, capture_output=capture)
+    if check and result.returncode != 0:
+        raise DockerSandboxError(result.returncode, result.stderr or "")
+    return result
+
+
+# -- Template / image operations ---------------------------------------------
+
+def build_template(dockerfile: str, tag: str, context_dir: str = ".") -> None:
+    """Build a Docker image from a Dockerfile string."""
+    _run_docker(
+        ["build", "-t", tag, "-f", dockerfile, context_dir],
+    )
+
+
+def tag_image(source: str, target: str) -> None:
+    """Tag a Docker image."""
+    _run_docker(["tag", source, target])
+
+
+def push_image(tag: str) -> None:
+    """Push a Docker image to a registry."""
+    _run_docker(["image", "push", tag])
+
+
+def pull_image(tag: str) -> None:
+    """Pull a Docker image from a registry."""
+    _run_docker(["image", "pull", tag])
+
+
+# -- Sandbox lifecycle -------------------------------------------------------
+
+def create(
+    template: str,
+    workspace: str | None = None,
+    *,
+    name: str | None = None,
+    read_only: bool = False,
+    extra_args: list[str] | None = None,
+) -> str:
+    """Create and start a sandbox.  Returns the sandbox name."""
+    args = ["run"]
+    if template:
+        args.extend(["-t", template])
+    if name:
+        args.extend(["--name", name])
+    if extra_args:
+        args.extend(extra_args)
+    if workspace:
+        ws = f"{workspace}:ro" if read_only else workspace
+        args.append(ws)
+    result = _run(args)
+    # ``docker sandbox run`` prints the sandbox name on success.
+    return (result.stdout or "").strip() or (name or "")
+
+
+def list_sandboxes() -> list[SandboxRow]:
+    """List sandboxes, returning parsed rows."""
+    result = _run(["ls"], check=False)
+    if result.returncode != 0:
+        return []
+
+    rows: list[SandboxRow] = []
+    lines = (result.stdout or "").strip().splitlines()
+    if len(lines) < 2:
+        return rows
+
+    # Parse the header to find column positions.
+    header = lines[0]
+    # Common headers: NAME, STATUS, IMAGE (columns vary by Docker version).
+    col_names = re.split(r"\s{2,}", header.strip())
+    col_starts = [header.index(c) for c in col_names]
+
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        parts: list[str] = []
+        for i, start in enumerate(col_starts):
+            end = col_starts[i + 1] if i + 1 < len(col_starts) else len(line)
+            parts.append(line[start:end].strip())
+        # Normalise to 3 fields minimum.
+        while len(parts) < 3:
+            parts.append("")
+        rows.append(SandboxRow(name=parts[0], status=parts[1], image=parts[2]))
+
+    return rows
+
+
+def exec_shell(name: str, command: str = "bash") -> None:
+    """Exec an interactive shell inside a running sandbox (foreground)."""
+    subprocess.run(
+        ["docker", "sandbox", "exec", "-it", name, command],
+    )
+
+
+def exec_command(name: str, command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Exec a non-interactive command inside a sandbox."""
+    return _run(["exec", name, *command])
+
+
+def stop(name: str) -> None:
+    _run(["stop", name])
+
+
+def remove(name: str) -> None:
+    _run(["rm", name])
+
+
+def save_as_template(name: str, tag: str) -> None:
+    _run(["save", name, tag])
+
+
+def sandbox_stats(name: str) -> dict[str, str]:
+    """Return resource usage for a sandbox via ``docker stats``."""
+    result = _run_docker(
+        ["stats", "--no-stream", "--format", "{{json .}}", name],
+    )
+    raw = json.loads((result.stdout or "").strip())
+    return {
+        "name": raw.get("Name", name),
+        "cpu_percent": raw.get("CPUPerc", ""),
+        "mem_usage": raw.get("MemUsage", ""),
+        "mem_percent": raw.get("MemPerc", ""),
+        "net_io": raw.get("NetIO", ""),
+        "block_io": raw.get("BlockIO", ""),
+        "pids": raw.get("PIDs", ""),
+    }
+
+
+# -- Utility -----------------------------------------------------------------
+
+def sandbox_exists(name: str) -> bool:
+    """Check whether a sandbox with the given name exists."""
+    for row in list_sandboxes():
+        if row.name == name:
+            return True
+    return False
+
+
+def is_docker_available() -> bool:
+    """Return True if the docker CLI is reachable."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            text=True,
+            capture_output=True,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def is_sandbox_feature_available() -> bool:
+    """Return True if ``docker sandbox`` subcommand exists."""
+    try:
+        result = subprocess.run(
+            ["docker", "sandbox", "--help"],
+            text=True,
+            capture_output=True,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False

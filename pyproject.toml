@@ -3,15 +3,29 @@ requires = ["hatchling>=1.26.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-shell"
+name = "sandboxer"
 version = "0.1.0"
-description = "Ephemeral Docker agent shell with dynamic OS/package setup."
+description = "Docker Sandbox manager for autonomous agents — templates, profiles, and unified UI."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["typer>=0.12.0"]
+dependencies = [
+    "typer>=0.12.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
 
 [project.scripts]
-agent-shell = "agent_shell.cli:entrypoint"
+sandboxer = "sandboxer.cli:entrypoint"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that require Docker Desktop with sandbox support",
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent_shell"]
+packages = ["sandboxer"]
