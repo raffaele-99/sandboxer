@@ -4,7 +4,25 @@ A Python CLI and library for managing Docker Sandbox environments for autonomous
 
 ### Install
 
+With [`uv`](https://docs.astral.sh/uv/) (recommended):
 ```bash
+uv tool install --from . sandboxer
+```
+
+Upgrade after pulling new commits:
+```bash
+uv tool upgrade --from . sandboxer
+```
+
+With `pipx`:
+```bash
+pipx install .
+```
+
+With a manual venv:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
