@@ -534,13 +534,9 @@ def serve_cmd(
     ] = None,
 ) -> None:
     """Start the web UI server for remote sandbox control."""
-    try:
-        import uvicorn
-    except ImportError:
-        _err("error: web dependencies not installed. Run: pip install sandboxer[web]")
-        raise typer.Exit(1)
-
     import secrets
+
+    import uvicorn
 
     from .web import create_app
 
