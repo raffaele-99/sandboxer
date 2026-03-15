@@ -37,9 +37,9 @@ class TestCreate:
         assert name == "my-sandbox"
         cmd = mock_run.call_args[0][0]
         assert cmd == [
-            "docker", "sandbox", "run",
-            "-t", "my-template:latest",
+            "docker", "sandbox", "create",
             "--name", "my-sandbox",
+            "-t", "my-template:latest",
             "claude", "/home/user/project",
         ]
 
@@ -49,7 +49,7 @@ class TestCreate:
         create("claude", "/workspace", name="my-sandbox")
         cmd = mock_run.call_args[0][0]
         assert "-t" not in cmd
-        assert cmd == ["docker", "sandbox", "run", "--name", "my-sandbox", "claude", "/workspace"]
+        assert cmd == ["docker", "sandbox", "create", "--name", "my-sandbox", "claude", "/workspace"]
 
     @patch("sandboxer.core.docker.subprocess.run")
     def test_create_read_only(self, mock_run) -> None:

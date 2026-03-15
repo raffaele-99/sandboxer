@@ -90,25 +90,24 @@ def create(
     name: str | None = None,
     read_only: bool = False,
 ) -> str:
-    """Create and start a sandbox.  Returns the sandbox name.
+    """Create a sandbox without starting the agent.  Returns the sandbox name.
 
-    Usage: ``docker sandbox run [-t IMAGE] [--name NAME] AGENT [WORKSPACE]``
+    Usage: ``docker sandbox create [--name NAME] [-t IMAGE] AGENT WORKSPACE``
 
     The *agent* arg is one of the built-in agents (claude, codex, shell, …).
-    ``-t`` overrides the base image.  Env vars and other options must be
-    passed via ``docker sandbox exec`` after creation.
+    ``-t`` overrides the base image.  Use ``docker sandbox exec`` to run
+    commands inside the created sandbox.
     """
-    args = ["run"]
-    if template:
-        args.extend(["-t", template])
+    args = ["create"]
     if name:
         args.extend(["--name", name])
+    if template:
+        args.extend(["-t", template])
     args.append(agent)
     if workspace:
         ws = f"{workspace}:ro" if read_only else workspace
         args.append(ws)
     result = _run(args)
-    # ``docker sandbox run`` prints the sandbox name on success.
     return (result.stdout or "").strip() or (name or "")
 
 
