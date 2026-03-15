@@ -35,11 +35,14 @@ def create_sandbox(
     config = config or GlobalConfig.load()
     sandbox_name = name or _sandbox_name(template.name, agent.name)
 
-    # Create the sandbox.  docker sandbox run only accepts --name and
-    # -t/--template — env vars must be set via docker sandbox exec.
+    # Create the sandbox.  docker sandbox run only accepts --name,
+    # -t/--template, and positional AGENT WORKSPACE args.  Env vars
+    # must be set via docker sandbox exec.
+    use_template = template.base_image if template.base_image != "docker/sandbox-templates:latest" else None
     docker_create(
-        template=template.base_image,
+        agent=agent.agent_type,
         workspace=workspace,
+        template=use_template,
         name=sandbox_name,
         read_only=template.read_only_workspace,
     )

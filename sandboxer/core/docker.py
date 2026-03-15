@@ -83,23 +83,27 @@ def pull_image(tag: str) -> None:
 # -- Sandbox lifecycle -------------------------------------------------------
 
 def create(
-    template: str,
+    agent: str,
     workspace: str | None = None,
     *,
+    template: str | None = None,
     name: str | None = None,
     read_only: bool = False,
 ) -> str:
     """Create and start a sandbox.  Returns the sandbox name.
 
-    ``docker sandbox run`` only supports ``--name``, ``-t``/``--template``,
-    and ``--pull-template``.  Env vars and other options must be passed via
-    ``docker sandbox exec`` after creation.
+    Usage: ``docker sandbox run [-t IMAGE] [--name NAME] AGENT [WORKSPACE]``
+
+    The *agent* arg is one of the built-in agents (claude, codex, shell, …).
+    ``-t`` overrides the base image.  Env vars and other options must be
+    passed via ``docker sandbox exec`` after creation.
     """
     args = ["run"]
     if template:
         args.extend(["-t", template])
     if name:
         args.extend(["--name", name])
+    args.append(agent)
     if workspace:
         ws = f"{workspace}:ro" if read_only else workspace
         args.append(ws)

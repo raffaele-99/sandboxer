@@ -33,19 +33,28 @@ class TestCreate:
     @patch("sandboxer.core.docker.subprocess.run")
     def test_basic_create(self, mock_run) -> None:
         mock_run.return_value = _mock_run(stdout="my-sandbox\n")
-        name = create("my-template:latest", "/home/user/project", name="my-sandbox")
+        name = create("claude", "/home/user/project", template="my-template:latest", name="my-sandbox")
         assert name == "my-sandbox"
         cmd = mock_run.call_args[0][0]
-        assert cmd[:2] == ["docker", "sandbox"]
-        assert "run" in cmd
-        assert "-t" in cmd
-        assert "my-template:latest" in cmd
-        assert "--name" in cmd
+        assert cmd == [
+            "docker", "sandbox", "run",
+            "-t", "my-template:latest",
+            "--name", "my-sandbox",
+            "claude", "/home/user/project",
+        ]
+
+    @patch("sandboxer.core.docker.subprocess.run")
+    def test_create_without_template(self, mock_run) -> None:
+        mock_run.return_value = _mock_run(stdout="my-sandbox\n")
+        create("claude", "/workspace", name="my-sandbox")
+        cmd = mock_run.call_args[0][0]
+        assert "-t" not in cmd
+        assert cmd == ["docker", "sandbox", "run", "--name", "my-sandbox", "claude", "/workspace"]
 
     @patch("sandboxer.core.docker.subprocess.run")
     def test_create_read_only(self, mock_run) -> None:
         mock_run.return_value = _mock_run(stdout="ro-box\n")
-        create("tmpl", "/workspace", name="ro-box", read_only=True)
+        create("claude", "/workspace", name="ro-box", read_only=True)
         cmd = mock_run.call_args[0][0]
         assert any(arg.endswith(":ro") for arg in cmd)
 
@@ -53,16 +62,7 @@ class TestCreate:
     def test_create_failure(self, mock_run) -> None:
         mock_run.return_value = _mock_run(returncode=1, stderr="no such template")
         with pytest.raises(DockerSandboxError, match="no such template"):
-            create("bad-template", "/workspace")
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_create_no_extra_args(self, mock_run) -> None:
-        """docker sandbox run only supports --name and -t, no extra flags."""
-        mock_run.return_value = _mock_run(stdout="basic-box\n")
-        result = create("tmpl", "/workspace", name="basic-box")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["docker", "sandbox", "run", "-t", "tmpl", "--name", "basic-box", "/workspace"]
-        assert result == "basic-box"
+            create("claude", "/workspace")
 
 
 class TestListSandboxes:
