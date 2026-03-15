@@ -88,16 +88,18 @@ def create(
     *,
     name: str | None = None,
     read_only: bool = False,
-    extra_args: list[str] | None = None,
 ) -> str:
-    """Create and start a sandbox.  Returns the sandbox name."""
+    """Create and start a sandbox.  Returns the sandbox name.
+
+    ``docker sandbox run`` only supports ``--name``, ``-t``/``--template``,
+    and ``--pull-template``.  Env vars and other options must be passed via
+    ``docker sandbox exec`` after creation.
+    """
     args = ["run"]
     if template:
         args.extend(["-t", template])
     if name:
         args.extend(["--name", name])
-    if extra_args:
-        args.extend(extra_args)
     if workspace:
         ws = f"{workspace}:ro" if read_only else workspace
         args.append(ws)
@@ -138,11 +140,23 @@ def list_sandboxes() -> list[SandboxRow]:
     return rows
 
 
-def exec_shell(name: str, command: str = "bash") -> None:
-    """Exec an interactive shell inside a running sandbox (foreground)."""
-    subprocess.run(
-        ["docker", "sandbox", "exec", "-it", name, command],
-    )
+def exec_shell(
+    name: str,
+    command: str = "bash",
+    *,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Exec an interactive shell inside a running sandbox (foreground).
+
+    ``docker sandbox exec`` supports ``-e`` for env vars and ``-it`` for
+    interactive TTY.
+    """
+    cmd = ["docker", "sandbox", "exec", "-it"]
+    if env:
+        for key, value in env.items():
+            cmd.extend(["-e", f"{key}={value}"])
+    cmd.extend([name, command])
+    subprocess.run(cmd)
 
 
 def exec_command(name: str, command: list[str]) -> subprocess.CompletedProcess[str]:

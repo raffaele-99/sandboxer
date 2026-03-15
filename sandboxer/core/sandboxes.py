@@ -35,9 +35,17 @@ def create_sandbox(
     config = config or GlobalConfig.load()
     sandbox_name = name or _sandbox_name(template.name, agent.name)
 
-    extra_args: list[str] = []
+    # Create the sandbox.  docker sandbox run only accepts --name and
+    # -t/--template — env vars must be set via docker sandbox exec.
+    docker_create(
+        template=template.base_image,
+        workspace=workspace,
+        name=sandbox_name,
+        read_only=template.read_only_workspace,
+    )
 
-    # Credential proxy integration.
+    # Start credential proxy (best-effort).  The proxy URL is stored in
+    # SandboxInfo and metadata so it can be passed as env vars to exec.
     proxy_url: str | None = None
     if agent.api_key_env_var:
         try:
@@ -47,20 +55,8 @@ def create_sandbox(
             proxy_url = pm.start_proxy(
                 sandbox_name, [agent], port=config.credential_proxy_port
             )
-            extra_args.extend([
-                "--env", f"HTTP_PROXY={proxy_url}",
-                "--env", f"HTTPS_PROXY={proxy_url}",
-            ])
         except Exception:
             pass  # proxy is best-effort
-
-    docker_create(
-        template=template.base_image,
-        workspace=workspace,
-        name=sandbox_name,
-        read_only=template.read_only_workspace,
-        extra_args=extra_args if extra_args else None,
-    )
 
     # Metadata for auto-cleanup.
     resolved_ttl = ttl_seconds if ttl_seconds is not None else config.default_ttl_seconds
@@ -134,13 +130,27 @@ def remove_sandbox(name: str) -> None:
         pass
 
 
+def _proxy_env(name: str) -> dict[str, str]:
+    """Build proxy env vars for a sandbox if a proxy is running."""
+    try:
+        from .proxy_manager import get_proxy_manager
+        pm = get_proxy_manager()
+        url = pm.get_proxy_url(name)
+        if url:
+            return {"HTTP_PROXY": url, "HTTPS_PROXY": url}
+    except Exception:
+        pass
+    return {}
+
+
 def shell_into(name: str) -> None:
     try:
         from .metadata import touch_activity
         touch_activity(name)
     except Exception:
         pass
-    docker_exec_shell(name)
+    env = _proxy_env(name)
+    docker_exec_shell(name, env=env if env else None)
 
 
 def get_sandbox_stats(name: str) -> SandboxStats:

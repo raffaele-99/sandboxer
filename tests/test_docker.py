@@ -56,12 +56,13 @@ class TestCreate:
             create("bad-template", "/workspace")
 
     @patch("sandboxer.core.docker.subprocess.run")
-    def test_create_with_extra_args(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(stdout="net-box\n")
-        create("tmpl", "/workspace", name="net-box", extra_args=["--network", "bridge"])
+    def test_create_no_extra_args(self, mock_run) -> None:
+        """docker sandbox run only supports --name and -t, no extra flags."""
+        mock_run.return_value = _mock_run(stdout="basic-box\n")
+        result = create("tmpl", "/workspace", name="basic-box")
         cmd = mock_run.call_args[0][0]
-        assert "--network" in cmd
-        assert "bridge" in cmd
+        assert cmd == ["docker", "sandbox", "run", "-t", "tmpl", "--name", "basic-box", "/workspace"]
+        assert result == "basic-box"
 
 
 class TestListSandboxes:
