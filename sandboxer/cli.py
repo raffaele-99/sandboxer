@@ -42,12 +42,23 @@ from .core.templates import (
     save_template,
 )
 
+_ctx = {"help_option_names": ["--help", "-h"]}
+
 app = typer.Typer(
     name="sandboxer",
     help="Manage Docker Sandbox environments for autonomous agents.",
     add_completion=False,
     rich_markup_mode="rich",
+    invoke_without_command=True,
+    context_settings=_ctx,
 )
+
+
+@app.callback(invoke_without_command=True)
+def _main(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 def _err(msg: str) -> None:
@@ -65,8 +76,15 @@ def _check_docker() -> None:
 
 # -- Sandbox commands --------------------------------------------------------
 
-sandbox_app = typer.Typer(help="Manage sandboxes.")
+sandbox_app = typer.Typer(help="Manage sandboxes.", invoke_without_command=True, context_settings=_ctx)
 app.add_typer(sandbox_app, name="sandbox")
+
+
+@sandbox_app.callback(invoke_without_command=True)
+def _sandbox_callback(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 @sandbox_app.command("create")
@@ -205,8 +223,15 @@ def sandbox_snapshot_cmd(
 
 # -- Template commands -------------------------------------------------------
 
-template_app = typer.Typer(help="Manage sandbox templates.")
+template_app = typer.Typer(help="Manage sandbox templates.", invoke_without_command=True, context_settings=_ctx)
 app.add_typer(template_app, name="template")
+
+
+@template_app.callback(invoke_without_command=True)
+def _template_callback(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 @template_app.command("ls")
@@ -305,8 +330,15 @@ def template_pull_cmd(
 
 # -- Agent commands ----------------------------------------------------------
 
-agent_app = typer.Typer(help="Manage agent profiles.")
+agent_app = typer.Typer(help="Manage agent profiles.", invoke_without_command=True, context_settings=_ctx)
 app.add_typer(agent_app, name="agent")
+
+
+@agent_app.callback(invoke_without_command=True)
+def _agent_callback(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 @agent_app.command("ls")
@@ -369,8 +401,15 @@ def agent_rm(
 
 # -- Mount allowlist commands ------------------------------------------------
 
-mount_app = typer.Typer(help="Manage mount allowlist.")
+mount_app = typer.Typer(help="Manage mount allowlist.", invoke_without_command=True, context_settings=_ctx)
 app.add_typer(mount_app, name="mount")
+
+
+@mount_app.callback(invoke_without_command=True)
+def _mount_callback(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 @mount_app.command("ls")
