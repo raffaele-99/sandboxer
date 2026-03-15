@@ -1,15 +1,24 @@
-"""Thin subprocess wrapper around the ``docker sandbox`` CLI."""
+"""Docker container management — uses regular ``docker run`` with optional gVisor runtime."""
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from dataclasses import dataclass
+
+# Labels used to identify and query sandboxer-managed containers.
+LABEL_MANAGED = "sandboxer.managed"
+LABEL_AGENT = "sandboxer.agent"
+LABEL_TEMPLATE = "sandboxer.template"
+LABEL_WORKSPACE = "sandboxer.workspace"
+
+# Default paths inside the container (matches docker/sandbox-templates images).
+CONTAINER_HOME = "/home/agent"
+CONTAINER_WORKSPACE = f"{CONTAINER_HOME}/workspace"
 
 
 @dataclass(frozen=True)
 class SandboxRow:
-    """One row from ``docker sandbox ls``."""
+    """One row from container listing."""
 
     name: str
     status: str
@@ -18,30 +27,17 @@ class SandboxRow:
     workspace: str = ""
 
 
-class DockerSandboxError(Exception):
-    """Raised when a docker sandbox command fails."""
+class DockerError(Exception):
+    """Raised when a docker command fails."""
 
     def __init__(self, returncode: int, stderr: str) -> None:
         self.returncode = returncode
         self.stderr = stderr
-        super().__init__(f"docker sandbox failed (rc={returncode}): {stderr}")
+        super().__init__(f"docker failed (rc={returncode}): {stderr}")
 
 
-def _run(
-    args: list[str],
-    *,
-    check: bool = True,
-    capture: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    cmd = ["docker", "sandbox", *args]
-    result = subprocess.run(
-        cmd,
-        text=True,
-        capture_output=capture,
-    )
-    if check and result.returncode != 0:
-        raise DockerSandboxError(result.returncode, result.stderr or "")
-    return result
+# Keep old name as alias for compatibility.
+DockerSandboxError = DockerError
 
 
 def _run_docker(
@@ -50,11 +46,11 @@ def _run_docker(
     check: bool = True,
     capture: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a plain ``docker`` command (not ``docker sandbox``)."""
+    """Run a ``docker`` command."""
     cmd = ["docker", *args]
     result = subprocess.run(cmd, text=True, capture_output=capture)
     if check and result.returncode != 0:
-        raise DockerSandboxError(result.returncode, result.stderr or "")
+        raise DockerError(result.returncode, result.stderr or "")
     return result
 
 
@@ -62,111 +58,105 @@ def _run_docker(
 
 def build_template(dockerfile: str, tag: str, context_dir: str = ".") -> None:
     """Build a Docker image from a Dockerfile string."""
-    _run_docker(
-        ["build", "-t", tag, "-f", dockerfile, context_dir],
-    )
+    _run_docker(["build", "-t", tag, "-f", dockerfile, context_dir])
 
 
 def tag_image(source: str, target: str) -> None:
-    """Tag a Docker image."""
     _run_docker(["tag", source, target])
 
 
 def push_image(tag: str) -> None:
-    """Push a Docker image to a registry."""
     _run_docker(["image", "push", tag])
 
 
 def pull_image(tag: str) -> None:
-    """Pull a Docker image from a registry."""
     _run_docker(["image", "pull", tag])
 
 
-# -- Sandbox lifecycle -------------------------------------------------------
+# -- Container lifecycle -----------------------------------------------------
 
 def create(
-    agent: str,
-    workspace: str | None = None,
+    image: str,
     *,
-    template: str | None = None,
     name: str | None = None,
-    read_only: bool = False,
-    extra_workspaces: list[str] | None = None,
+    volumes: dict[str, str] | None = None,
+    env: dict[str, str] | None = None,
+    labels: dict[str, str] | None = None,
+    runtime: str | None = None,
+    network: str | None = None,
 ) -> str:
-    """Create a sandbox without starting the agent.  Returns the sandbox name.
+    """Create and start a container in detached mode.  Returns the container name.
 
-    Usage: ``docker sandbox create [--name NAME] [-t IMAGE] AGENT WORKSPACE``
+    Uses ``docker run -d`` with an idle ``sleep infinity`` process so that
+    the container stays alive for ``docker exec`` calls.
 
-    The *agent* arg is one of the built-in agents (claude, codex, shell, …).
-    ``-t`` overrides the base image.  Use ``docker sandbox exec`` to run
-    commands inside the created sandbox.
-
-    *extra_workspaces* are additional host paths to mount (e.g. auth
-    directories).  They are passed as extra positional args after the
-    primary workspace.
+    *volumes* maps host paths to container paths.
+    *runtime* can be ``"runsc"`` for gVisor isolation.
     """
-    args = ["create"]
+    args = ["run", "-d"]
+    if runtime:
+        args.extend(["--runtime", runtime])
     if name:
         args.extend(["--name", name])
-    if template:
-        args.extend(["-t", template])
-    args.append(agent)
-    if workspace:
-        ws = f"{workspace}:ro" if read_only else workspace
-        args.append(ws)
-    for ew in extra_workspaces or []:
-        args.append(ew)
-    result = _run(args)
-    return (result.stdout or "").strip() or (name or "")
+    if network:
+        args.extend(["--network", network])
+
+    # Always mark as sandboxer-managed.
+    all_labels = {LABEL_MANAGED: "true"}
+    if labels:
+        all_labels.update(labels)
+    for k, v in all_labels.items():
+        args.extend(["--label", f"{k}={v}"])
+
+    if volumes:
+        for host_path, container_path in volumes.items():
+            args.extend(["-v", f"{host_path}:{container_path}"])
+
+    if env:
+        for k, v in env.items():
+            args.extend(["-e", f"{k}={v}"])
+
+    # Keep the container running without starting an agent.
+    args.extend(["--entrypoint", "sleep"])
+    args.append(image)
+    args.append("infinity")
+
+    result = _run_docker(args)
+    return name or (result.stdout or "").strip()[:12]
 
 
 def list_sandboxes() -> list[SandboxRow]:
-    """List sandboxes, returning parsed rows."""
-    result = _run(["ls"], check=False)
+    """List sandboxer-managed containers."""
+    result = _run_docker(
+        [
+            "ps", "-a",
+            "--filter", f"label={LABEL_MANAGED}=true",
+            "--format", "{{json .}}",
+        ],
+        check=False,
+    )
     if result.returncode != 0:
         return []
 
     rows: list[SandboxRow] = []
-    lines = (result.stdout or "").strip().splitlines()
-    if len(lines) < 2:
-        return rows
-
-    # Parse the header to find column positions.
-    header = lines[0]
-    col_names = re.split(r"\s{2,}", header.strip())
-    col_starts = [header.index(c) for c in col_names]
-
-    # Build a lookup so we can extract by column name regardless of order.
-    def _col_index(name: str) -> int | None:
-        for i, c in enumerate(col_names):
-            if c.upper() == name.upper():
-                return i
-        return None
-
-    name_idx = _col_index("SANDBOX") or _col_index("NAME") or 0
-    status_idx = _col_index("STATUS")
-    image_idx = _col_index("IMAGE")
-    agent_idx = _col_index("AGENT")
-    workspace_idx = _col_index("WORKSPACE")
-
-    def _get(parts: list[str], idx: int | None) -> str:
-        return parts[idx] if idx is not None and idx < len(parts) else ""
-
-    for line in lines[1:]:
+    for line in (result.stdout or "").strip().splitlines():
         if not line.strip():
             continue
-        parts: list[str] = []
-        for i, start in enumerate(col_starts):
-            end = col_starts[i + 1] if i + 1 < len(col_starts) else len(line)
-            parts.append(line[start:end].strip())
-        while len(parts) < len(col_names):
-            parts.append("")
+        data = json.loads(line)
+
+        # Parse labels from the comma-separated string.
+        label_map: dict[str, str] = {}
+        for part in (data.get("Labels") or "").split(","):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                label_map[k] = v
+
         rows.append(SandboxRow(
-            name=_get(parts, name_idx) or parts[0],
-            status=_get(parts, status_idx),
-            image=_get(parts, image_idx),
-            agent=_get(parts, agent_idx),
-            workspace=_get(parts, workspace_idx),
+            name=data.get("Names", ""),
+            status=data.get("State", data.get("Status", "")),
+            image=data.get("Image", ""),
+            agent=label_map.get(LABEL_AGENT, ""),
+            workspace=label_map.get(LABEL_WORKSPACE, ""),
         ))
 
     return rows
@@ -177,13 +167,12 @@ def exec_shell(
     command: str = "bash",
     *,
     env: dict[str, str] | None = None,
+    workdir: str | None = None,
 ) -> None:
-    """Exec an interactive shell inside a running sandbox (foreground).
-
-    ``docker sandbox exec`` supports ``-e`` for env vars and ``-it`` for
-    interactive TTY.
-    """
-    cmd = ["docker", "sandbox", "exec", "-it"]
+    """Exec an interactive shell inside a running container (foreground)."""
+    cmd = ["docker", "exec", "-it"]
+    if workdir:
+        cmd.extend(["-w", workdir])
     if env:
         for key, value in env.items():
             cmd.extend(["-e", f"{key}={value}"])
@@ -191,25 +180,39 @@ def exec_shell(
     subprocess.run(cmd)
 
 
-def exec_command(name: str, command: list[str]) -> subprocess.CompletedProcess[str]:
-    """Exec a non-interactive command inside a sandbox."""
-    return _run(["exec", name, *command])
+def exec_command(
+    name: str,
+    command: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    workdir: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Exec a non-interactive command inside a container."""
+    args = ["exec"]
+    if workdir:
+        args.extend(["-w", workdir])
+    if env:
+        for k, v in env.items():
+            args.extend(["-e", f"{k}={v}"])
+    args.append(name)
+    args.extend(command)
+    return _run_docker(args)
 
 
 def stop(name: str) -> None:
-    _run(["stop", name])
+    _run_docker(["stop", name])
 
 
 def remove(name: str) -> None:
-    _run(["rm", name])
+    _run_docker(["rm", "-f", name])
 
 
 def save_as_template(name: str, tag: str) -> None:
-    _run(["save", name, tag])
+    _run_docker(["commit", name, tag])
 
 
 def sandbox_stats(name: str) -> dict[str, str]:
-    """Return resource usage for a sandbox via ``docker stats``."""
+    """Return resource usage for a container via ``docker stats``."""
     result = _run_docker(
         ["stats", "--no-stream", "--format", "{{json .}}", name],
     )
@@ -228,7 +231,7 @@ def sandbox_stats(name: str) -> dict[str, str]:
 # -- Utility -----------------------------------------------------------------
 
 def sandbox_exists(name: str) -> bool:
-    """Check whether a sandbox with the given name exists."""
+    """Check whether a container with the given name exists."""
     for row in list_sandboxes():
         if row.name == name:
             return True
@@ -239,23 +242,26 @@ def is_docker_available() -> bool:
     """Return True if the docker CLI is reachable."""
     try:
         result = subprocess.run(
-            ["docker", "info"],
-            text=True,
-            capture_output=True,
+            ["docker", "info"], text=True, capture_output=True,
         )
         return result.returncode == 0
     except FileNotFoundError:
         return False
 
 
-def is_sandbox_feature_available() -> bool:
-    """Return True if ``docker sandbox`` subcommand exists."""
+def is_gvisor_available() -> bool:
+    """Return True if the ``runsc`` (gVisor) runtime is available."""
     try:
         result = subprocess.run(
-            ["docker", "sandbox", "--help"],
-            text=True,
-            capture_output=True,
+            ["docker", "info", "--format", "{{json .Runtimes}}"],
+            text=True, capture_output=True,
         )
-        return result.returncode == 0
+        if result.returncode != 0:
+            return False
+        return "runsc" in (result.stdout or "")
     except FileNotFoundError:
         return False
+
+
+# Backward compat alias.
+is_sandbox_feature_available = is_gvisor_available

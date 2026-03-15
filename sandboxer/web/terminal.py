@@ -44,7 +44,7 @@ class TerminalSession:
         master, slave = pty.openpty()
         self._master_fd = master
 
-        cmd = ["docker", "sandbox", "exec", "-it"]
+        cmd = ["docker", "exec", "-it"]
         if self._env:
             for key, value in self._env.items():
                 cmd.extend(["-e", f"{key}={value}"])

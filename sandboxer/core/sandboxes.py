@@ -2,11 +2,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from .config import SANDBOX_NAME_PREFIX, GlobalConfig
 from .docker import (
+    CONTAINER_HOME,
+    CONTAINER_WORKSPACE,
+    LABEL_AGENT,
+    LABEL_TEMPLATE,
+    LABEL_WORKSPACE,
     create as docker_create,
     exec_shell as docker_exec_shell,
+    is_gvisor_available,
     list_sandboxes as docker_list,
     remove as docker_remove,
     sandbox_stats as docker_sandbox_stats,
@@ -16,9 +23,30 @@ from .docker import (
 from .models import AgentProfile, SandboxInfo, SandboxStats, SandboxTemplate
 
 
+# Default agent-type → image mapping (Docker sandbox-templates images).
+_DEFAULT_IMAGES: dict[str, str] = {
+    "claude": "docker/sandbox-templates:claude",
+    "codex": "docker/sandbox-templates:codex",
+    "gemini": "docker/sandbox-templates:gemini",
+    "shell": "docker/sandbox-templates:shell",
+}
+_FALLBACK_IMAGE = "docker/sandbox-templates:latest"
+
+
 def _sandbox_name(template: str, agent: str) -> str:
     ts = datetime.now().strftime("%Y%m%d%H%M%S")
     return f"{SANDBOX_NAME_PREFIX}{template}-{agent}-{ts}"
+
+
+def _resolve_image(template: SandboxTemplate, agent: AgentProfile) -> str:
+    """Pick the container image to use.
+
+    If the template specifies a non-default base_image, use that.
+    Otherwise map the agent type to the matching sandbox-templates tag.
+    """
+    if template.base_image != "docker/sandbox-templates:latest":
+        return template.base_image
+    return _DEFAULT_IMAGES.get(agent.agent_type, _FALLBACK_IMAGE)
 
 
 def create_sandbox(
@@ -35,27 +63,43 @@ def create_sandbox(
     config = config or GlobalConfig.load()
     sandbox_name = name or _sandbox_name(template.name, agent.name)
 
-    # Create the sandbox.  docker sandbox run only accepts --name,
-    # -t/--template, and positional AGENT WORKSPACE args.  Env vars
-    # must be set via docker sandbox exec.
-    use_template = template.base_image if template.base_image != "docker/sandbox-templates:latest" else None
-    extra_workspaces: list[str] = []
-    if agent.auth_dir:
-        from pathlib import Path
+    image = _resolve_image(template, agent)
 
-        resolved = str(Path(agent.auth_dir).expanduser().resolve())
-        extra_workspaces.append(resolved)
+    # Build volume mounts: workspace + optional auth dir.
+    volumes: dict[str, str] = {}
+    resolved_workspace = str(Path(workspace).resolve())
+    ws_mount = f"{CONTAINER_WORKSPACE}:ro" if template.read_only_workspace else CONTAINER_WORKSPACE
+    volumes[resolved_workspace] = ws_mount
+
+    if agent.auth_dir:
+        resolved_auth = str(Path(agent.auth_dir).expanduser().resolve())
+        # Mount at the matching dotdir inside the container home.
+        # e.g. ~/.codex → /home/agent/.codex
+        auth_dirname = Path(agent.auth_dir).name
+        volumes[resolved_auth] = f"{CONTAINER_HOME}/{auth_dirname}"
+
+    # Labels for identification and listing.
+    labels = {
+        LABEL_AGENT: agent.agent_type,
+        LABEL_TEMPLATE: template.name,
+        LABEL_WORKSPACE: resolved_workspace,
+    }
+
+    # Use gVisor if available, otherwise fall back to default runtime.
+    runtime = config.container_runtime
+    if runtime == "runsc" and not is_gvisor_available():
+        runtime = None
+
     docker_create(
-        agent=agent.agent_type,
-        workspace=workspace,
-        template=use_template,
+        image,
         name=sandbox_name,
-        read_only=template.read_only_workspace,
-        extra_workspaces=extra_workspaces or None,
+        volumes=volumes,
+        labels=labels,
+        runtime=runtime,
+        network=template.network if template.network != "bridge" else None,
     )
 
-    # Start credential proxy (best-effort).  The proxy URL is stored in
-    # SandboxInfo and metadata so it can be passed as env vars to exec.
+    # Start credential proxy (best-effort).
     proxy_url: str | None = None
     if agent.api_key_env_var:
         try:
@@ -66,7 +110,7 @@ def create_sandbox(
                 sandbox_name, [agent], port=config.credential_proxy_port
             )
         except Exception:
-            pass  # proxy is best-effort
+            pass
 
     # Metadata for auto-cleanup.
     resolved_ttl = ttl_seconds if ttl_seconds is not None else config.default_ttl_seconds
@@ -103,19 +147,18 @@ def create_sandbox(
 
 
 def list_running_sandboxes() -> list[SandboxInfo]:
-    """List sandboxes managed by sandboxer (filtered by name prefix)."""
+    """List containers managed by sandboxer."""
     rows = docker_list()
     results: list[SandboxInfo] = []
     for row in rows:
-        if row.name.startswith(SANDBOX_NAME_PREFIX):
-            results.append(
-                SandboxInfo(
-                    name=row.name,
-                    status=row.status,
-                    agent=row.agent,
-                    workspace=row.workspace,
-                )
+        results.append(
+            SandboxInfo(
+                name=row.name,
+                status=row.status,
+                agent=row.agent,
+                workspace=row.workspace,
             )
+        )
     return results
 
 
@@ -162,7 +205,7 @@ def shell_into(name: str) -> None:
     except Exception:
         pass
     env = _proxy_env(name)
-    docker_exec_shell(name, env=env if env else None)
+    docker_exec_shell(name, env=env if env else None, workdir=CONTAINER_WORKSPACE)
 
 
 def get_sandbox_stats(name: str) -> SandboxStats:

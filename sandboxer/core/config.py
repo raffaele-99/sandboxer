@@ -44,6 +44,7 @@ class GlobalConfig:
     credential_proxy_port: int = 9876
     auto_cleanup_orphans: bool = True
     network_mode: str = "bridge"
+    container_runtime: str = "runsc"  # "runsc" for gVisor, "" for default
     default_ttl_seconds: int | None = None
     default_idle_timeout_seconds: int | None = None
 
@@ -56,6 +57,7 @@ class GlobalConfig:
             "credential_proxy_port": self.credential_proxy_port,
             "auto_cleanup_orphans": self.auto_cleanup_orphans,
             "network_mode": self.network_mode,
+            "container_runtime": self.container_runtime,
             "default_ttl_seconds": self.default_ttl_seconds,
             "default_idle_timeout_seconds": self.default_idle_timeout_seconds,
         }
@@ -73,6 +75,7 @@ class GlobalConfig:
             credential_proxy_port=data.get("credential_proxy_port", 9876),
             auto_cleanup_orphans=data.get("auto_cleanup_orphans", True),
             network_mode=data.get("network_mode", "bridge"),
+            container_runtime=data.get("container_runtime", "runsc"),
             default_ttl_seconds=data.get("default_ttl_seconds"),
             default_idle_timeout_seconds=data.get("default_idle_timeout_seconds"),
         )
