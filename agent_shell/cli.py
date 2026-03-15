@@ -14,12 +14,16 @@ from datetime import datetime
 from typing import Annotated, Iterable, Optional
 
 import typer
+import yaml
 
 
 DEFAULT_OS_IMAGE = "ubuntu:24.04"
 CONFIG_REL_PATH = Path(".config/agent-shell/config.yml")
 DEFAULT_ALLOW_SUDO = False
 CACHE_FORMAT_VERSION = "3"
+
+# Allowed keys inside an agents.{name} block.
+_AGENT_SETTINGS = {"allow_sudo", "network", "auto", "read_only_workspace", "agent_version", "os", "packages"}
 
 
 @dataclass(frozen=True)
@@ -215,81 +219,149 @@ def cache_root_path() -> Path:
     return Path.home() / ".cache" / "agent-shell"
 
 
+def _defaults() -> dict[str, object]:
+    """Built-in defaults for the ``agents.default`` block."""
+    return {
+        "allow_sudo": DEFAULT_ALLOW_SUDO,
+        "network": "none",
+        "auto": False,
+        "read_only_workspace": False,
+    }
+
+
 def load_config(path: Path) -> dict[str, object]:
+    """Load config.yml and return a normalised dict.
+
+    Top-level keys:
+        ``default_agent``  – str | None
+    Nested under ``agents``:
+        ``agents.default``  – fallback settings for every agent
+        ``agents.<name>``   – per-agent overrides (codex, claude)
+
+    The old flat ``default_*`` keys are migrated transparently into
+    ``agents.default`` so existing configs keep working.
+    """
     config: dict[str, object] = {
         "default_agent": None,
-        "default_allow_sudo": DEFAULT_ALLOW_SUDO,
-        "default_network": "none",
-        "default_auto": False,
-        "default_read_only_workspace": False,
+        "agents": {"default": _defaults()},
     }
     if not path.exists():
         return config
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        content = line.split("#", 1)[0].strip()
-        if not content or ":" not in content:
-            continue
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        eprint(f"warning: failed to parse {path}: {exc}")
+        return config
 
-        key, raw_value = content.split(":", 1)
-        key = key.strip()
-        raw = raw_value.strip().strip('"').strip("'")
-        if key == "default_agent":
-            if not raw or raw.lower() in {"none", "null", "~"}:
-                config["default_agent"] = None
-                continue
-            candidate = raw.lower()
+    if not isinstance(raw, dict):
+        return config
+
+    # -- default_agent -------------------------------------------------------
+    agent_val = raw.get("default_agent")
+    if agent_val is not None:
+        candidate = str(agent_val).strip().lower()
+        if candidate in {"none", "null", "~", ""}:
+            config["default_agent"] = None
+        else:
             if candidate == "claude-code":
                 candidate = "claude"
             if candidate in {"codex", "claude"}:
                 config["default_agent"] = candidate
             else:
-                eprint(f"warning: ignoring unsupported default_agent in {path}: {raw}")
-        elif key == "default_allow_sudo":
-            parsed = parse_bool(raw)
-            if parsed is None:
-                eprint(f"warning: ignoring invalid default_allow_sudo in {path}: {raw}")
-            else:
-                config["default_allow_sudo"] = parsed
-        elif key == "default_network":
-            if raw:
-                config["default_network"] = raw.lower()
-        elif key == "default_auto":
-            parsed = parse_bool(raw)
-            if parsed is None:
-                eprint(f"warning: ignoring invalid default_auto in {path}: {raw}")
-            else:
-                config["default_auto"] = parsed
-        elif key == "default_read_only_workspace":
-            parsed = parse_bool(raw)
-            if parsed is None:
-                eprint(f"warning: ignoring invalid default_read_only_workspace in {path}: {raw}")
-            else:
-                config["default_read_only_workspace"] = parsed
+                eprint(f"warning: ignoring unsupported default_agent in {path}: {agent_val}")
 
+    # -- agents section ------------------------------------------------------
+    agents_raw = raw.get("agents")
+    agents: dict[str, dict[str, object]] = {"default": _defaults()}
+
+    # Migrate legacy flat keys (default_allow_sudo → agents.default.allow_sudo)
+    _legacy_map = {
+        "default_allow_sudo": "allow_sudo",
+        "default_network": "network",
+        "default_auto": "auto",
+        "default_read_only_workspace": "read_only_workspace",
+    }
+    for old_key, new_key in _legacy_map.items():
+        if old_key in raw:
+            agents["default"][new_key] = raw[old_key]
+
+    if isinstance(agents_raw, dict):
+        for section, block in agents_raw.items():
+            section = str(section).lower()
+            if section == "claude-code":
+                section = "claude"
+            if section not in {"default", "codex", "claude"}:
+                eprint(f"warning: ignoring unknown agents section in {path}: {section}")
+                continue
+            if not isinstance(block, dict):
+                continue
+            if section == "default":
+                agents["default"].update({k: v for k, v in block.items() if k in _AGENT_SETTINGS})
+            else:
+                agents[section] = {k: v for k, v in block.items() if k in _AGENT_SETTINGS}
+
+    config["agents"] = agents
     return config
+
+
+def resolve_agent_settings(config: dict[str, object], agent_name: str) -> dict[str, object]:
+    """Merge agents.default with agents.<agent_name> for the resolved agent."""
+    agents = config.get("agents", {})
+    if not isinstance(agents, dict):
+        agents = {}
+    merged = dict(_defaults())
+    merged.update(agents.get("default") or {})
+    merged.update(agents.get(agent_name) or {})
+    return merged
 
 
 def write_config(path: Path, config: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    out: dict[str, object] = {}
     default_agent = config.get("default_agent")
-    agent_value = "null" if default_agent is None else str(default_agent)
-    allow_sudo = bool(config.get("default_allow_sudo", False))
-    network = config.get("default_network", "none")
-    auto = bool(config.get("default_auto", False))
-    ro_workspace = bool(config.get("default_read_only_workspace", False))
-    rendered = "\n".join(
-        [
-            "# agent-shell defaults",
-            f"default_agent: {agent_value}",
-            f"default_allow_sudo: {'true' if allow_sudo else 'false'}",
-            f"default_network: {network}",
-            f"default_auto: {'true' if auto else 'false'}",
-            f"default_read_only_workspace: {'true' if ro_workspace else 'false'}",
-            "",
-        ]
-    )
-    path.write_text(rendered, encoding="utf-8")
+    out["default_agent"] = default_agent
+
+    agents = config.get("agents")
+    if isinstance(agents, dict) and agents:
+        out["agents"] = dict(agents)
+
+    path.write_text(yaml.dump(out, default_flow_style=False, sort_keys=False), encoding="utf-8")
+
+
+def _wizard_bool(prompt_text: str, current: bool) -> bool:
+    label = "y" if current else "n"
+    while True:
+        user_value = input(f"{prompt_text} [y/n] ({label}): ").strip()
+        if not user_value:
+            return current
+        parsed = parse_bool(user_value)
+        if parsed is None:
+            print("Invalid value. Enter y or n.")
+            continue
+        return parsed
+
+
+def _wizard_choice(prompt_text: str, choices: set[str], current: str) -> str:
+    choices_str = "/".join(sorted(choices))
+    while True:
+        user_value = input(f"{prompt_text} [{choices_str}] ({current}): ").strip().lower()
+        if not user_value:
+            return current
+        if user_value in choices:
+            return user_value
+        print(f"Invalid value. Enter one of: {choices_str}.")
+
+
+def _wizard_agent_block(label: str, current: dict[str, object]) -> dict[str, object]:
+    """Prompt the user for one agent settings block (default, codex, or claude)."""
+    print(f"\n--- {label} settings ---")
+    result: dict[str, object] = {}
+    result["allow_sudo"] = _wizard_bool("Allow sudo", bool(current.get("allow_sudo", False)))
+    result["network"] = _wizard_choice("Network mode", {"none", "bridge", "host"}, str(current.get("network", "none")))
+    result["auto"] = _wizard_bool("Auto mode", bool(current.get("auto", False)))
+    result["read_only_workspace"] = _wizard_bool("Read-only workspace", bool(current.get("read_only_workspace", False)))
+    return result
 
 
 def run_config_wizard(path: Path, existing_config: dict[str, object]) -> None:
@@ -316,76 +388,31 @@ def run_config_wizard(path: Path, existing_config: dict[str, object]) -> None:
                 break
             print("Invalid value. Enter codex, claude, or none.")
 
-        current_sudo = bool(existing_config.get("default_allow_sudo", DEFAULT_ALLOW_SUDO))
-        current_sudo_label = "y" if current_sudo else "n"
-        while True:
-            user_value = input(
-                f"Default allow sudo [y/n] ({current_sudo_label}): "
-            ).strip()
-            if not user_value:
-                selected_sudo = current_sudo
-                break
-            parsed = parse_bool(user_value)
-            if parsed is None:
-                print("Invalid value. Enter y or n.")
-                continue
-            selected_sudo = parsed
-            break
-        current_network = str(existing_config.get("default_network", "none"))
-        while True:
-            user_value = input(
-                f"Default network mode [none/bridge/host] ({current_network}): "
-            ).strip().lower()
-            if not user_value:
-                selected_network = current_network
-                break
-            if user_value in {"none", "bridge", "host"}:
-                selected_network = user_value
-                break
-            print("Invalid value. Enter none, bridge, or host.")
+        agents_cfg: dict[str, dict[str, object]] = {}
+        existing_agents = existing_config.get("agents", {})
+        if not isinstance(existing_agents, dict):
+            existing_agents = {}
 
-        current_auto = bool(existing_config.get("default_auto", False))
-        current_auto_label = "y" if current_auto else "n"
-        while True:
-            user_value = input(
-                f"Default auto mode [y/n] ({current_auto_label}): "
-            ).strip()
-            if not user_value:
-                selected_auto = current_auto
-                break
-            parsed = parse_bool(user_value)
-            if parsed is None:
-                print("Invalid value. Enter y or n.")
-                continue
-            selected_auto = parsed
-            break
+        agents_cfg["default"] = _wizard_agent_block("Default (all agents)", existing_agents.get("default") or _defaults())
 
-        current_ro = bool(existing_config.get("default_read_only_workspace", False))
-        current_ro_label = "y" if current_ro else "n"
-        while True:
-            user_value = input(
-                f"Default read-only workspace [y/n] ({current_ro_label}): "
-            ).strip()
-            if not user_value:
-                selected_ro = current_ro
-                break
-            parsed = parse_bool(user_value)
-            if parsed is None:
-                print("Invalid value. Enter y or n.")
-                continue
-            selected_ro = parsed
-            break
+        configure_per_agent = _wizard_bool("\nConfigure per-agent overrides?", bool(existing_agents.get("codex") or existing_agents.get("claude")))
+        if configure_per_agent:
+            for agent_name in ("codex", "claude"):
+                existing_block = existing_agents.get(agent_name, {})
+                if not isinstance(existing_block, dict):
+                    existing_block = {}
+                # Pre-fill with defaults so the user sees resolved values
+                merged = dict(agents_cfg["default"])
+                merged.update(existing_block)
+                agents_cfg[agent_name] = _wizard_agent_block(agent_name.capitalize(), merged)
 
     except (EOFError, KeyboardInterrupt):
         print("\nCancelled.")
         raise typer.Exit(1)
 
-    new_config = {
+    new_config: dict[str, object] = {
         "default_agent": selected_agent,
-        "default_allow_sudo": selected_sudo,
-        "default_network": selected_network,
-        "default_auto": selected_auto,
-        "default_read_only_workspace": selected_ro,
+        "agents": agents_cfg,
     }
     write_config(path, new_config)
     print("Saved.")
@@ -627,11 +654,17 @@ def main(
         eprint(f"error: {err}")
         raise typer.Exit(1)
 
+    # -- resolve per-agent config (agents.default merged with agents.<name>) --
+    agent_cfg = resolve_agent_settings(cfg, adapter.name)
+
     workspace = Path(mount).expanduser().resolve()
     if not workspace.is_dir():
         eprint(f"error: mount path does not exist or is not a directory: {workspace}")
         raise typer.Exit(1)
 
+    # Apply per-agent os/packages/agent_version when CLI didn't override
+    if os_image == DEFAULT_OS_IMAGE and agent_cfg.get("os"):
+        os_image = str(agent_cfg["os"])
     os_family = infer_os_family(os_image)
     if os_family == "unknown":
         eprint(
@@ -641,14 +674,21 @@ def main(
         raise typer.Exit(1)
 
     pkg_list = list(packages) if packages else []
+    cfg_packages = agent_cfg.get("packages")
+    if isinstance(cfg_packages, list) and not packages:
+        pkg_list = [str(p) for p in cfg_packages]
+
+    if agent_version is None and agent_cfg.get("agent_version"):
+        agent_version = str(agent_cfg["agent_version"])
+
     resolved_allow_sudo = (
-        bool(cfg.get("default_allow_sudo", DEFAULT_ALLOW_SUDO))
+        bool(agent_cfg.get("allow_sudo", DEFAULT_ALLOW_SUDO))
         if allow_sudo is None
         else allow_sudo
     )
     if resolved_allow_sudo and allow_sudo is None:
         eprint(
-            "warning: sudo enabled via config default. "
+            "warning: sudo enabled via config. "
             "Use --no-allow-sudo to disable."
         )
 
@@ -742,8 +782,8 @@ def main(
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         container_name = sanitize_name(f"agent-shell-{adapter.name}-{timestamp}")
 
-    resolved_network = network or str(cfg.get("default_network", "none"))
-    resolved_ro = read_only_workspace or bool(cfg.get("default_read_only_workspace", False))
+    resolved_network = network or str(agent_cfg.get("network", "none"))
+    resolved_ro = read_only_workspace or bool(agent_cfg.get("read_only_workspace", False))
 
     run_cmd = [
         "docker",
@@ -773,7 +813,7 @@ def main(
     run_cmd.append(image_tag)
     if _agent_passthrough_args:
         run_cmd.extend([adapter.cli_binary, *_agent_passthrough_args])
-    elif auto or cfg.get("default_auto", False):
+    elif auto or agent_cfg.get("auto", False):
         run_cmd.extend([adapter.cli_binary, *adapter.auto_args()])
     else:
         run_cmd.extend(["/bin/bash", "-l"])

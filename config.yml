@@ -1,0 +1,34 @@
+# agent-shell example configuration
+# Copy to: ~/.config/agent-shell/config.yml
+
+# Which agent to launch when none is specified via CLI.
+# Valid: codex | claude | null (prompt each time)
+default_agent: null
+
+# Per-agent settings.
+# Resolution order: CLI flags > agents.<name> > agents.default > built-in defaults.
+agents:
+  default:
+    allow_sudo: false
+    network: none              # none | bridge | host
+    auto: false
+    read_only_workspace: false
+
+  codex:
+    allow_sudo: true
+    network: bridge            # codex often needs network for tool use
+    auto: true
+    # agent_version: "0.107.0" # pin a specific CLI version
+    # os: "ubuntu:24.04"       # override the base image
+    # packages:                # extra OS packages to install
+    #   - jq
+    #   - ripgrep
+
+  claude:
+    allow_sudo: false
+    network: none
+    auto: false
+    # agent_version: "1.0.20"
+    # os: "debian:bookworm"
+    # packages:
+    #   - jq
