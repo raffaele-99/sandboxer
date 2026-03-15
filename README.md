@@ -1,15 +1,6 @@
-# Docker Agent Setups
+# agent-shell
 
-This repo contains Ubuntu-based Docker agent setups for autonomous Codex runs.
-
-## Included
-- `agent-daily-ubuntu/`: hardened daily-use profile (no sudo).
-- `agent-daily-ubuntu-sudo/`: autonomous profile with passwordless sudo and runtime tool installs.
-
-See each directory's `README.md` for build and run instructions.
-
-## MVP: `agent-shell` (Python + Docker)
-This repository includes a Python `agent-shell` command that generates per-run Dockerfiles, builds local images, and launches an interactive container immediately.
+A Python CLI that generates per-run Dockerfiles, builds local images, and launches sandboxed containers for autonomous agents (Codex or Claude).
 
 ### Install
 With `uv`:

@@ -1,54 +1,55 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository contains two Dockerized Codex agent profiles:
-- `agent-daily-ubuntu/`: hardened daily profile (non-root user, no `sudo`).
-- `agent-daily-ubuntu-sudo/`: autonomous profile with passwordless `sudo`.
+This repository provides `agent-shell`, a Python CLI that dynamically generates Dockerfiles, builds local images, and launches sandboxed containers for autonomous agents (Codex or Claude).
 
-Each profile includes:
-- `Dockerfile`: image definition and Codex installation.
-- `docker-compose.yml`: runtime settings, mounts, and environment variables.
-- `README.md`: profile-specific usage notes.
-
-Top-level `README.md` provides the entry point and profile selection guidance.
+- `agent_shell/cli.py`: main CLI implementation (Typer app, agent adapters, Dockerfile generation, config management).
+- `agent_shell/__init__.py`: package version.
+- `pyproject.toml`: build metadata, dependencies, and console script entry point.
+- `README.md`: user-facing documentation.
 
 ## Build, Test, and Development Commands
-Run commands from the repository root:
 
+Install for development:
 ```bash
-export HOST_UID="$(id -u)" HOST_GID="$(id -g)" WORKSPACE_DIR="$(pwd)"
-docker compose -f agent-daily-ubuntu/docker-compose.yml build
-docker compose -f agent-daily-ubuntu/docker-compose.yml run --rm codex-agent-daily
+pip install -e .
+# or
+uv tool install --from . agent-shell
 ```
 
+Run without installing:
 ```bash
-export HOST_UID="$(id -u)" HOST_GID="$(id -g)" WORKSPACE_DIR="$(pwd)"
-docker compose -f agent-daily-ubuntu-sudo/docker-compose.yml build
-docker compose -f agent-daily-ubuntu-sudo/docker-compose.yml run --rm codex-agent-daily-sudo
+uv run agent-shell codex -m .
+```
+
+Smoke-test a container:
+```bash
+agent-shell codex -o ubuntu:24.04 -m . --dry-run
+agent-shell codex -o ubuntu:24.04 -m .
+agent-shell claude -o ubuntu:24.04 -m . --allow-sudo
 ```
 
 Quick validation inside a container:
-- `whoami`
-- `pwd`
-- `codex --version`
+- `whoami` (expect `agent`)
+- `pwd` (expect `/workspace`)
+- For sudo containers: `sudo -n true`
 
 ## Coding Style & Naming Conventions
-- Use 2-space indentation for YAML and 4-space continuation indentation in Dockerfiles, matching existing files.
-- Keep Dockerfile package lists alphabetized where practical.
-- Prefer descriptive, kebab-case directory names (for example, `agent-daily-ubuntu-sudo`).
-- Keep service names explicit (`codex-agent-daily`, `codex-agent-daily-sudo`).
+- Python: 4-space indentation, type hints, dataclass-based adapters.
+- Use Typer for CLI argument definitions with `Annotated` type hints.
+- Keep generated Dockerfile package lists alphabetized where practical.
 
 ## Testing Guidelines
 There is no automated test suite yet. Validate changes with container smoke tests:
-1. Build both profiles.
-2. Start each container and verify user, working directory, and Codex availability.
-3. For sudo profile, verify `sudo -n true`.
+1. Run `--dry-run` to inspect the generated Dockerfile.
+2. Launch a container and verify user, working directory, and agent availability.
+3. For `--allow-sudo`, verify `sudo -n true`.
 
 Document manual test results in PR descriptions.
 
 ## Commit & Pull Request Guidelines
-- Use short, imperative commit subjects (example: `Add sudo profile smoke checks`).
-- Keep commits focused to one profile or one cross-cutting change.
+- Use short, imperative commit subjects (example: `feat: add Alpine support`).
+- Keep commits focused to one logical change.
 - PRs should include:
   - purpose and scope,
   - commands run for verification,
@@ -56,6 +57,7 @@ Document manual test results in PR descriptions.
   - linked issue (if applicable).
 
 ## Security & Configuration Tips
-- Always set `WORKSPACE_DIR` to a minimal host path.
-- Never mount home directories or secrets by default.
-- Prefer the non-sudo profile unless runtime package installation is required.
+- Mount only the minimal workspace directory needed.
+- Auth directories (`~/.codex`, `~/.claude`) are mounted read-only by default.
+- Prefer running without `--allow-sudo` unless runtime package installation is required.
+- All containers run with `cap_drop=ALL`, `no-new-privileges`, and `--network=none` by default.
