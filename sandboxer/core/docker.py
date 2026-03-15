@@ -89,6 +89,7 @@ def create(
     template: str | None = None,
     name: str | None = None,
     read_only: bool = False,
+    extra_workspaces: list[str] | None = None,
 ) -> str:
     """Create a sandbox without starting the agent.  Returns the sandbox name.
 
@@ -97,6 +98,10 @@ def create(
     The *agent* arg is one of the built-in agents (claude, codex, shell, …).
     ``-t`` overrides the base image.  Use ``docker sandbox exec`` to run
     commands inside the created sandbox.
+
+    *extra_workspaces* are additional host paths to mount (e.g. auth
+    directories).  They are passed as extra positional args after the
+    primary workspace.
     """
     args = ["create"]
     if name:
@@ -107,6 +112,8 @@ def create(
     if workspace:
         ws = f"{workspace}:ro" if read_only else workspace
         args.append(ws)
+    for ew in extra_workspaces or []:
+        args.append(ew)
     result = _run(args)
     return (result.stdout or "").strip() or (name or "")
 

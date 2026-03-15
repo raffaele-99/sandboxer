@@ -29,10 +29,11 @@ pip install -e ".[dev]"
 ### Prerequisites
 
 - Docker Desktop 4.58+ with `docker sandbox` support (`docker sandbox --help` must work).
-- API keys in your shell for the agents you use:
+- **Option A — API keys** (recommended): set environment variables for the agents you use. The credential proxy will inject keys into requests so sandboxes never see raw credentials.
   - Claude: `ANTHROPIC_API_KEY`
   - Codex: `OPENAI_API_KEY`
   - Gemini: `GOOGLE_API_KEY`
+- **Option B — Auth directory mount**: if you don't have an API key (e.g. you use a Claude Pro/Max subscription via Claude Code), you can mount the agent's auth directory (e.g. `~/.claude`) into the sandbox with `--auth-dir`. See [Auth directory mount](#auth-directory-mount) below.
 
 ### Quick start
 
@@ -162,6 +163,22 @@ Config is stored at `~/.config/sandboxer/config.yml`. Supported keys:
 - **Template marketplace** — push/pull templates to/from OCI registries
 - **Auto-cleanup** — TTL and idle-timeout policies with metadata tracking
 - **Mount allowlist** — block sensitive host paths (`.ssh`, `.aws`, `.gnupg`, etc.)
+
+### Auth directory mount
+
+> **Security warning:** Using `--auth-dir` mounts your host auth directory directly into the sandbox container. This **bypasses the credential proxy** — the sandbox will have direct access to your auth tokens and session data. Only use this option if you do not have an API key and understand the security trade-off. The credential proxy (Option A) is the recommended approach because it ensures sandboxed agents never see raw credentials.
+
+To use a subscription-based agent (e.g. Claude Code with a Claude Pro/Max subscription):
+
+```bash
+# Create an agent profile with auth dir instead of API key
+sandboxer agent create my-claude --type claude --env-var "" --auth-dir ~/.claude
+
+# Launch a sandbox — ~/.claude is mounted into the container
+sandboxer sandbox create python-dev my-claude -w .
+```
+
+When `--auth-dir` is set and no API key env var is configured, the credential proxy is not started. The agent inside the sandbox authenticates directly using the mounted session data.
 
 ### Development
 

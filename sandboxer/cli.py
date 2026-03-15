@@ -348,10 +348,11 @@ def agent_ls() -> None:
     if not profiles:
         typer.echo("No agent profiles found. Use 'sandboxer agent create' to add one.")
         return
-    typer.echo(f"{'NAME':<20} {'TYPE':<10} {'ENV VAR'}")
+    typer.echo(f"{'NAME':<20} {'TYPE':<10} {'AUTH'}")
     typer.echo("-" * 50)
     for a in profiles:
-        typer.echo(f"{a.name:<20} {a.agent_type:<10} {a.api_key_env_var}")
+        auth = a.api_key_env_var if a.api_key_env_var else f"auth_dir: {a.auth_dir}" if a.auth_dir else "none"
+        typer.echo(f"{a.name:<20} {a.agent_type:<10} {auth}")
 
 
 @agent_app.command("create")
@@ -367,7 +368,12 @@ def agent_create(
     ] = "",
     auth_dir: Annotated[
         Optional[str],
-        typer.Option("--auth-dir", help="Host auth directory to mount."),
+        typer.Option(
+            "--auth-dir",
+            help="Host auth directory to mount into the sandbox (e.g. ~/.claude). "
+            "WARNING: bypasses the credential proxy — the sandbox will have direct "
+            "access to your auth tokens.",
+        ),
     ] = None,
 ) -> None:
     """Create an agent profile."""

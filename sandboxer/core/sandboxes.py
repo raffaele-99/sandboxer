@@ -39,12 +39,19 @@ def create_sandbox(
     # -t/--template, and positional AGENT WORKSPACE args.  Env vars
     # must be set via docker sandbox exec.
     use_template = template.base_image if template.base_image != "docker/sandbox-templates:latest" else None
+    extra_workspaces: list[str] = []
+    if agent.auth_dir:
+        from pathlib import Path
+
+        resolved = str(Path(agent.auth_dir).expanduser().resolve())
+        extra_workspaces.append(resolved)
     docker_create(
         agent=agent.agent_type,
         workspace=workspace,
         template=use_template,
         name=sandbox_name,
         read_only=template.read_only_workspace,
+        extra_workspaces=extra_workspaces or None,
     )
 
     # Start credential proxy (best-effort).  The proxy URL is stored in
