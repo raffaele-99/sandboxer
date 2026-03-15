@@ -1,0 +1,16 @@
+/* Minimal overrides for sandboxer web UI. */
+
+nav a {
+  text-decoration: none;
+}
+
+table code {
+  font-size: 0.85em;
+}
+
+/* Compact action buttons in table rows. */
+td button, td a[role="button"] {
+  display: inline-block;
+  margin-right: 0.25rem;
+  margin-bottom: 0;
+}

@@ -512,6 +512,62 @@ def do_cleanup(
     typer.echo(f"Removed {len(removed)} sandbox(es).")
 
 
+# -- Serve command -----------------------------------------------------------
+
+@app.command("serve")
+def serve_cmd(
+    host: Annotated[
+        str,
+        typer.Option("--host", "-H", help="Bind address."),
+    ] = "0.0.0.0",
+    port: Annotated[
+        int,
+        typer.Option("--port", "-p", help="Bind port."),
+    ] = 8080,
+    ssl_certfile: Annotated[
+        Optional[str],
+        typer.Option("--ssl-certfile", help="Path to SSL certificate for HTTPS."),
+    ] = None,
+    ssl_keyfile: Annotated[
+        Optional[str],
+        typer.Option("--ssl-keyfile", help="Path to SSL key for HTTPS."),
+    ] = None,
+) -> None:
+    """Start the web UI server for remote sandbox control."""
+    try:
+        import uvicorn
+    except ImportError:
+        _err("error: web dependencies not installed. Run: pip install sandboxer[web]")
+        raise typer.Exit(1)
+
+    import secrets
+
+    from .web import create_app
+
+    token = secrets.token_urlsafe(32)
+    app_instance = create_app(token=token)
+
+    scheme = "https" if ssl_certfile else "http"
+    display_host = "localhost" if host == "0.0.0.0" else host
+    url = f"{scheme}://{display_host}:{port}/?token={token}"
+
+    typer.echo(f"Sandboxer web UI starting on {scheme}://{host}:{port}")
+    typer.echo(f"Auth token: {token}")
+    typer.echo(f"Open: {url}")
+
+    kwargs: dict[str, object] = {
+        "host": host,
+        "port": port,
+        "log_level": "info",
+    }
+    if ssl_certfile:
+        kwargs["ssl_certfile"] = ssl_certfile
+    if ssl_keyfile:
+        kwargs["ssl_keyfile"] = ssl_keyfile
+
+    uvicorn.run(app_instance, **kwargs)  # type: ignore[arg-type]
+
+
 # -- Config command ----------------------------------------------------------
 
 @app.command("config")

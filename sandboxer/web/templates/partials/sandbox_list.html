@@ -1,0 +1,6 @@
+{% for s in sandboxes %}
+{% include "partials/sandbox_row.html" %}
+{% endfor %}
+{% if not sandboxes %}
+<tr><td colspan="3"><em>No sandboxes running.</em></td></tr>
+{% endif %}

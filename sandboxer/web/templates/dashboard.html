@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Sandboxer{% endblock %}
+
+{% block content %}
+<section>
+  <hgroup>
+    <h2>Sandboxes</h2>
+    <p>
+      <button hx-get="/sandboxes" hx-target="#sandbox-list" hx-swap="innerHTML"
+              class="outline secondary" style="display:inline; width:auto; padding: 0.25rem 0.75rem; font-size: 0.85rem;">
+        Refresh
+      </button>
+    </p>
+  </hgroup>
+
+  <div hx-get="/sandboxes" hx-trigger="every 10s" hx-target="#sandbox-list" hx-swap="innerHTML">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="sandbox-list">
+        {% include "partials/sandbox_list.html" %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if not sandboxes %}
+  <p><small>No sandboxes running. Create one with <code>sandboxer sandbox create</code>.</small></p>
+  {% endif %}
+</section>
+{% endblock %}
