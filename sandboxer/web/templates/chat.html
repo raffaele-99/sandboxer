@@ -8,6 +8,10 @@
   .msg-assistant code { font-size: 0.85em; }
   .streaming-cursor::after { content: ''; display: inline-block; width: 2px; height: 1em; background: #06b6d4; animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 2px; }
   @keyframes blink { 50% { opacity: 0; } }
+  @keyframes pulse-dot { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
+  .thinking-dots span { animation: pulse-dot 1.4s infinite ease-in-out; }
+  .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
   #session-dropdown.hidden { display: none; }
 </style>
 {% endblock %}
@@ -87,6 +91,7 @@
   var ws = null;
   var currentAssistantEl = null;
   var isStreaming = false;
+  var thinkingEl = null;
 
   // --- Session management ---
 
@@ -257,6 +262,30 @@
     isStreaming = false;
   }
 
+  function showThinking(elapsed) {
+    if (!thinkingEl) {
+      thinkingEl = document.createElement("div");
+      thinkingEl.className = "flex items-center gap-2 text-sm text-slate-500 py-2";
+      thinkingEl.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> <span class="thinking-text">Processing</span>';
+      messagesEl.appendChild(thinkingEl);
+      scrollToBottom();
+    }
+    var text = "Processing";
+    if (elapsed >= 5) {
+      var m = Math.floor(elapsed / 60);
+      var s = elapsed % 60;
+      text = "Processing (" + (m > 0 ? m + "m " : "") + s + "s)";
+    }
+    thinkingEl.querySelector(".thinking-text").textContent = text;
+  }
+
+  function hideThinking() {
+    if (thinkingEl) {
+      thinkingEl.remove();
+      thinkingEl = null;
+    }
+  }
+
   // --- Formatting ---
 
   function formatTool(text) {
@@ -364,6 +393,7 @@
       inputEl.disabled = true;
       sendBtn.disabled = true;
       finishAssistantMessage();
+      hideThinking();
     };
 
     ws.onerror = function() {
@@ -372,6 +402,15 @@
   }
 
   function handleMessage(msg) {
+    // --- Status heartbeat from server ---
+    if (msg.type === "status") {
+      showThinking(msg.elapsed || 0);
+      return;
+    }
+
+    // Any real event means the agent is responding — hide the indicator.
+    hideThinking();
+
     // Session auto-created by server
     if (msg.type === "session.created" && msg.session_id) {
       currentSessionId = msg.session_id;

@@ -29,6 +29,8 @@ class SandboxTemplate(BaseModel):
     npm_packages: list[str] = Field(default_factory=list)
     custom_dockerfile_lines: list[str] = Field(default_factory=list)
     allow_sudo: bool = False
+    pip_use_venv: bool = True
+    pip_venv_path: str = ""
     network: str = "bridge"
     read_only_workspace: bool = False
     agent_type: str | None = None

@@ -88,6 +88,23 @@ def build_template(
         raise DockerError(result.returncode, result.stderr or "")
 
 
+def build_template_stream(
+    dockerfile: str, tag: str, context_dir: str = ".", dns: str | None = None,
+) -> subprocess.Popen:
+    """Start a container image build and return the Popen handle for streaming.
+
+    Caller should read ``stdout`` (and ``stderr``) line-by-line and call
+    ``wait()`` when done.
+    """
+    rt = get_runtime()
+    cmd = rt.build_build_command(tag, context_dir, file=dockerfile)
+    if dns:
+        cmd = cmd[:-1] + ["--dns", dns, cmd[-1]]
+    return subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+
+
 def tag_image(source: str, target: str) -> None:
     _run_cmd(["tag", source, target])
 

@@ -81,10 +81,21 @@
         Allow sudo
       </label>
       <label class="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+        <input type="checkbox" name="pip_use_venv" value="true" checked
+               class="w-4 h-4 rounded bg-slate-700 border-slate-600 text-cyan-500 focus:ring-cyan-500">
+        Install pip packages in venv
+      </label>
+      <label class="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
         <input type="checkbox" name="read_only_workspace" value="true"
                class="w-4 h-4 rounded bg-slate-700 border-slate-600 text-cyan-500 focus:ring-cyan-500">
         Read-only workspace
       </label>
+    </div>
+
+    <div>
+      <label for="pip_venv_path" class="block text-sm font-medium text-slate-300 mb-1.5">Venv Path <span class="text-slate-500">(optional, defaults to ~/.venv)</span></label>
+      <input type="text" id="pip_venv_path" name="pip_venv_path" placeholder="/home/agent/.venv"
+             class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent font-mono">
     </div>
 
     <div class="pt-2">

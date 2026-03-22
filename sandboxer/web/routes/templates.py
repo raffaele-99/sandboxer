@@ -64,6 +64,8 @@ async def template_create(request: Request) -> Response:
         npm_packages=_split(form.get("npm_packages", "")),
         network=form.get("network", "bridge").strip(),
         allow_sudo="allow_sudo" in form,
+        pip_use_venv="pip_use_venv" in form,
+        pip_venv_path=form.get("pip_venv_path", "").strip(),
         read_only_workspace="read_only_workspace" in form,
     )
 
@@ -130,6 +132,8 @@ async def template_update(request: Request) -> Response:
         npm_packages=_split(form.get("npm_packages", "")),
         network=form.get("network", "bridge").strip(),
         allow_sudo="allow_sudo" in form,
+        pip_use_venv="pip_use_venv" in form,
+        pip_venv_path=form.get("pip_venv_path", "").strip(),
         read_only_workspace="read_only_workspace" in form,
     )
 

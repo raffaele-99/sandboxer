@@ -314,6 +314,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             )
 
             assistant_text_parts: list[str] = []
+            _HEARTBEAT_INTERVAL = 3  # seconds
 
             try:
                 proc = await asyncio.to_thread(
@@ -326,12 +327,41 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 )
 
                 loop = asyncio.get_running_loop()
+                got_output = False
+                started_at = time.time()
+
                 while True:
-                    line = await loop.run_in_executor(
+                    # Read next line with a timeout so we can send heartbeats.
+                    read_fut = loop.run_in_executor(
                         None, proc.stdout.readline  # type: ignore[union-attr]
                     )
+                    try:
+                        line = await asyncio.wait_for(
+                            asyncio.shield(read_fut), timeout=_HEARTBEAT_INTERVAL,
+                        )
+                    except asyncio.TimeoutError:
+                        # No output yet — check if process is still alive.
+                        rc = proc.poll()
+                        elapsed = int(time.time() - started_at)
+                        if rc is not None:
+                            # Process exited without further output.
+                            await read_fut  # drain the future
+                            break
+                        await websocket.send_text(json.dumps({
+                            "type": "status",
+                            "status": "processing",
+                            "elapsed": elapsed,
+                        }))
+                        # Now await the original read (no new executor call).
+                        try:
+                            line = await asyncio.wait_for(
+                                read_fut, timeout=_HEARTBEAT_INTERVAL,
+                            )
+                        except asyncio.TimeoutError:
+                            continue
                     if not line:
                         break
+                    got_output = True
                     line = line.strip()
                     if not line:
                         continue
@@ -381,14 +411,18 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 stderr = await asyncio.to_thread(
                     lambda: proc.stderr.read()  # type: ignore[union-attr]
                 )
-                if proc.returncode != 0 and stderr:
-                    await websocket.send_text(
-                        json.dumps({
-                            "type": "result",
-                            "is_error": True,
-                            "result": stderr.strip(),
-                        })
-                    )
+                if proc.returncode != 0:
+                    err_msg = (stderr or "").strip()
+                    if not err_msg and not got_output:
+                        err_msg = f"Agent process exited with code {proc.returncode}"
+                    if err_msg:
+                        await websocket.send_text(
+                            json.dumps({
+                                "type": "result",
+                                "is_error": True,
+                                "result": err_msg,
+                            })
+                        )
 
             except Exception as exc:
                 await websocket.send_text(

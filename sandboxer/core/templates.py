@@ -102,7 +102,16 @@ def render_dockerfile(template: SandboxTemplate) -> str:
 
     if template.pip_packages:
         pip_str = " ".join(template.pip_packages)
-        lines.append(f"RUN pip install --no-cache-dir {pip_str}")
+        if template.pip_use_venv:
+            venv = template.pip_venv_path or f"{CONTAINER_HOME}/.venv"
+            lines.append(
+                f"RUN python3 -m venv {venv}"
+                f" && {venv}/bin/pip install --no-cache-dir {pip_str}"
+            )
+            lines.append(f'RUN echo ". {venv}/bin/activate" >> {CONTAINER_HOME}/.bashrc')
+            lines.append(f"ENV PATH={venv}/bin:$PATH")
+        else:
+            lines.append(f"RUN pip install --no-cache-dir --break-system-packages {pip_str}")
         lines.append("")
 
     if template.npm_packages:
