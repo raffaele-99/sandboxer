@@ -6,6 +6,7 @@ import json
 import subprocess
 import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from starlette.requests import Request
@@ -177,6 +178,229 @@ def _extract_session_id(agent_type: str, line_data: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Background agent tasks — survive WebSocket disconnects
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AgentTask:
+    """A running agent process with buffered output."""
+
+    sandbox_name: str
+    session_id: str
+    agent_type: str
+    proc: subprocess.Popen | None = None
+    status: str = "running"  # running | done | error
+    events: list[dict] = field(default_factory=list)
+    assistant_text_parts: list[str] = field(default_factory=list)
+    started_at: float = field(default_factory=time.time)
+    subscribers: set[WebSocket] = field(default_factory=set)
+    _task: asyncio.Task | None = field(default=None, repr=False)
+
+
+# Key: (sandbox_name, session_id) → AgentTask
+_active_tasks: dict[tuple[str, str], AgentTask] = {}
+
+# Dedicated thread pool for agent I/O so concurrent agents don't starve
+# the default executor (used by the rest of the app).
+import concurrent.futures as _cf
+_agent_executor = _cf.ThreadPoolExecutor(max_workers=32, thread_name_prefix="agent-io")
+
+
+def _get_task(sandbox_name: str, session_id: str) -> AgentTask | None:
+    return _active_tasks.get((sandbox_name, session_id))
+
+
+async def _broadcast(task: AgentTask, event: dict) -> None:
+    """Send an event to all connected subscribers and buffer it."""
+    task.events.append(event)
+    dead: set[WebSocket] = set()
+    for ws in task.subscribers:
+        try:
+            await ws.send_text(json.dumps(event))
+        except Exception:
+            dead.add(ws)
+    task.subscribers -= dead
+
+
+async def _run_agent_task(
+    task: AgentTask,
+    cmd: list[str],
+    adapter_agent_type: str,
+    chat_state: dict,
+) -> None:
+    """Run the agent CLI in the background, buffering all events."""
+    sandbox_name = task.sandbox_name
+    _HEARTBEAT_INTERVAL = 3
+
+    try:
+        proc = await asyncio.to_thread(
+            lambda: subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+        task.proc = proc
+
+        loop = asyncio.get_running_loop()
+        got_output = False
+        json_buffer = ""
+
+        while True:
+            # Read a line with heartbeat.
+            line: str | None = None
+            while True:
+                read_fut = loop.run_in_executor(
+                    _agent_executor, proc.stdout.readline,  # type: ignore[union-attr]
+                )
+                try:
+                    line = await asyncio.wait_for(
+                        asyncio.shield(read_fut), timeout=_HEARTBEAT_INTERVAL,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    rc = proc.poll()
+                    elapsed = int(time.time() - task.started_at)
+                    if rc is not None:
+                        await read_fut
+                        line = None
+                        break
+                    await _broadcast(task, {
+                        "type": "status",
+                        "status": "processing",
+                        "elapsed": elapsed,
+                    })
+                    try:
+                        line = await asyncio.wait_for(
+                            read_fut, timeout=_HEARTBEAT_INTERVAL,
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        continue
+
+            if not line:
+                break
+            got_output = True
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # JSON parsing with multi-line buffer.
+            if not json_buffer:
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    json_buffer = stripped
+                    continue
+            else:
+                json_buffer += "\n" + stripped
+                try:
+                    parsed = json.loads(json_buffer)
+                    json_buffer = ""
+                except json.JSONDecodeError:
+                    if len(json_buffer) > 1_000_000:
+                        json_buffer = ""
+                    continue
+
+            # Extract agent session ID.
+            sid = _extract_session_id(adapter_agent_type, parsed)
+            if sid and not chat_state.get("agent_session_id"):
+                chat_state["agent_session_id"] = sid
+                await asyncio.to_thread(_save_session, sandbox_name, chat_state)
+                await _broadcast(task, {
+                    "type": "agent_session.id",
+                    "agent_session_id": sid,
+                })
+
+            # Collect assistant text for history.
+            if adapter_agent_type == "codex":
+                if parsed.get("type") == "item.completed":
+                    item = parsed.get("item", {})
+                    if item.get("type") == "agent_message" and item.get("text"):
+                        task.assistant_text_parts.append(item["text"])
+                    elif item.get("type") == "command_execution":
+                        cmd_str = item.get("command", "command")
+                        output = item.get("aggregated_output", "")
+                        if output:
+                            task.assistant_text_parts.append(
+                                f"```\n$ {cmd_str}\n{output}\n```"
+                            )
+                    elif item.get("type") in (
+                        "file_edit", "file_create", "file_write",
+                    ):
+                        fp = (
+                            item.get("filepath")
+                            or item.get("path")
+                            or item.get("filename")
+                            or "file"
+                        )
+                        content = item.get("content") or item.get("text") or ""
+                        if content:
+                            task.assistant_text_parts.append(
+                                f"Wrote `{fp}`:\n```\n{content[:2000]}\n```"
+                            )
+            elif adapter_agent_type == "claude":
+                if parsed.get("type") == "assistant":
+                    content = (parsed.get("message") or {}).get("content", [])
+                    for block in content:
+                        if block.get("type") == "text" and block.get("text"):
+                            task.assistant_text_parts.append(block["text"])
+                elif parsed.get("type") == "content_block_delta":
+                    delta_text = (parsed.get("delta") or {}).get("text", "")
+                    if delta_text:
+                        task.assistant_text_parts.append(delta_text)
+                elif (
+                    parsed.get("type") == "result"
+                    and parsed.get("result")
+                    and not parsed.get("is_error")
+                ):
+                    if not task.assistant_text_parts:
+                        task.assistant_text_parts.append(parsed["result"])
+
+            await _broadcast(task, parsed)
+
+        await asyncio.to_thread(proc.wait)
+
+        stderr = await asyncio.to_thread(
+            lambda: proc.stderr.read()  # type: ignore[union-attr]
+        )
+        if proc.returncode != 0:
+            err_msg = (stderr or "").strip()
+            if not err_msg and not got_output:
+                err_msg = f"Agent process exited with code {proc.returncode}"
+            if err_msg:
+                await _broadcast(task, {
+                    "type": "result",
+                    "is_error": True,
+                    "result": err_msg,
+                })
+
+        task.status = "done"
+
+    except Exception as exc:
+        task.status = "error"
+        await _broadcast(task, {
+            "type": "result",
+            "is_error": True,
+            "result": f"Error: {exc}",
+        })
+
+    finally:
+        # Save assistant response.
+        if task.assistant_text_parts:
+            full_text = "\n\n".join(task.assistant_text_parts)
+            await asyncio.to_thread(
+                _append_message, sandbox_name, "assistant", full_text, chat_state,
+            )
+            task.assistant_text_parts.clear()
+        # Clean up.
+        if task.proc is not None and task.proc.poll() is None:
+            task.proc.kill()
+        _active_tasks.pop((sandbox_name, task.session_id), None)
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -246,6 +470,9 @@ async def chat_history(request: Request) -> JSONResponse:
     if not session_id:
         return JSONResponse({"messages": []})
     state = await asyncio.to_thread(_load_session, name, session_id)
+    # Include whether an agent task is currently running.
+    task = _get_task(name, session_id)
+    state["agent_running"] = task is not None and task.status == "running"
     return JSONResponse(state)
 
 
@@ -283,6 +510,32 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
     chat_state = await asyncio.to_thread(_load_session, name, session_id)
 
+    # Send existing agent session ID if resuming.
+    if chat_state.get("agent_session_id"):
+        await websocket.send_text(json.dumps({
+            "type": "agent_session.id",
+            "agent_session_id": chat_state["agent_session_id"],
+        }))
+
+    # Check if there's an active background task for this session.
+    # If so, replay buffered events and subscribe.
+    existing_task = _get_task(name, session_id)
+    if existing_task and existing_task.status == "running":
+        # Replay buffered events from the current turn.
+        for event in existing_task.events:
+            try:
+                await websocket.send_text(json.dumps(event))
+            except Exception:
+                return
+        # Subscribe to future events.
+        existing_task.subscribers.add(websocket)
+        await websocket.send_text(json.dumps({
+            "type": "status",
+            "status": "processing",
+            "reconnected": True,
+            "elapsed": int(time.time() - existing_task.started_at),
+        }))
+
     try:
         while True:
             raw = await websocket.receive_text()
@@ -295,10 +548,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 continue
 
             user_text = msg["message"]
-            _append_message(name, "user", user_text, chat_state)
+            await asyncio.to_thread(_append_message, name, "user", user_text, chat_state)
 
-            # Ensure agent CLI finds auth/config mounted at CONTAINER_HOME,
-            # even when the container runs as root (HOME=/root).
+            # Ensure agent CLI finds auth/config mounted at CONTAINER_HOME.
             exec_env: dict[str, str] = {"HOME": CONTAINER_HOME}
             try:
                 from ...core.sandboxes import _proxy_env
@@ -313,135 +565,46 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 env=exec_env,
             )
 
-            assistant_text_parts: list[str] = []
-            _HEARTBEAT_INTERVAL = 3  # seconds
+            # Create a background task for this agent invocation.
+            task = AgentTask(
+                sandbox_name=name,
+                session_id=session_id,
+                agent_type=adapter.agent_type,
+                subscribers={websocket},
+            )
+            _active_tasks[(name, session_id)] = task
+            task._task = asyncio.create_task(
+                _run_agent_task(task, cmd, adapter.agent_type, chat_state)
+            )
 
+            # Wait for the task to finish OR the websocket to disconnect.
+            # If the websocket disconnects, the task keeps running in the
+            # background — the user can reconnect and see buffered output.
             try:
-                proc = await asyncio.to_thread(
-                    lambda: subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
-                )
-
-                loop = asyncio.get_running_loop()
-                got_output = False
-                started_at = time.time()
-
-                while True:
-                    # Read next line with a timeout so we can send heartbeats.
-                    read_fut = loop.run_in_executor(
-                        None, proc.stdout.readline  # type: ignore[union-attr]
-                    )
+                while task.status == "running":
+                    # Keep reading from websocket to detect disconnects.
+                    # We use a short timeout so we can check task status.
                     try:
-                        line = await asyncio.wait_for(
-                            asyncio.shield(read_fut), timeout=_HEARTBEAT_INTERVAL,
+                        ws_msg = await asyncio.wait_for(
+                            websocket.receive_text(), timeout=1.0,
                         )
+                        # Could handle cancel/interrupt here in the future.
                     except asyncio.TimeoutError:
-                        # No output yet — check if process is still alive.
-                        rc = proc.poll()
-                        elapsed = int(time.time() - started_at)
-                        if rc is not None:
-                            # Process exited without further output.
-                            await read_fut  # drain the future
-                            break
-                        await websocket.send_text(json.dumps({
-                            "type": "status",
-                            "status": "processing",
-                            "elapsed": elapsed,
-                        }))
-                        # Now await the original read (no new executor call).
-                        try:
-                            line = await asyncio.wait_for(
-                                read_fut, timeout=_HEARTBEAT_INTERVAL,
-                            )
-                        except asyncio.TimeoutError:
-                            continue
-                    if not line:
-                        break
-                    got_output = True
-                    line = line.strip()
-                    if not line:
                         continue
-                    try:
-                        parsed = json.loads(line)
-
-                        # Capture agent session ID from the first response.
-                        sid = _extract_session_id(adapter.agent_type, parsed)
-                        if sid and not chat_state.get("agent_session_id"):
-                            chat_state["agent_session_id"] = sid
-                            _save_session(name, chat_state)
-
-                        # Collect assistant text for history.
-                        if adapter.agent_type == "codex":
-                            if parsed.get("type") == "item.completed":
-                                item = parsed.get("item", {})
-                                if item.get("type") == "agent_message" and item.get("text"):
-                                    assistant_text_parts.append(item["text"])
-                        elif adapter.agent_type == "claude":
-                            if parsed.get("type") == "assistant":
-                                content = (parsed.get("message") or {}).get("content", [])
-                                for block in content:
-                                    if block.get("type") == "text" and block.get("text"):
-                                        assistant_text_parts.append(block["text"])
-                            elif parsed.get("type") == "content_block_delta":
-                                delta_text = (parsed.get("delta") or {}).get("text", "")
-                                if delta_text:
-                                    assistant_text_parts.append(delta_text)
-                            elif parsed.get("type") == "result" and parsed.get("result") and not parsed.get("is_error"):
-                                if not assistant_text_parts:
-                                    assistant_text_parts.append(parsed["result"])
-
-                        await websocket.send_text(line)
-                    except json.JSONDecodeError:
-                        assistant_text_parts.append(line)
-                        await websocket.send_text(
-                            json.dumps({
-                                "type": "assistant",
-                                "message": {
-                                    "content": [{"type": "text", "text": line}],
-                                },
-                            })
-                        )
-
-                await asyncio.to_thread(proc.wait)
-
-                stderr = await asyncio.to_thread(
-                    lambda: proc.stderr.read()  # type: ignore[union-attr]
-                )
-                if proc.returncode != 0:
-                    err_msg = (stderr or "").strip()
-                    if not err_msg and not got_output:
-                        err_msg = f"Agent process exited with code {proc.returncode}"
-                    if err_msg:
-                        await websocket.send_text(
-                            json.dumps({
-                                "type": "result",
-                                "is_error": True,
-                                "result": err_msg,
-                            })
-                        )
-
-            except Exception as exc:
-                await websocket.send_text(
-                    json.dumps({
-                        "type": "result",
-                        "is_error": True,
-                        "result": f"Error: {exc}",
-                    })
-                )
-
-            # Save assistant response to history.
-            if assistant_text_parts:
-                full_text = "\n\n".join(assistant_text_parts)
-                _append_message(name, "assistant", full_text, chat_state)
+            except WebSocketDisconnect:
+                # Unsubscribe but let the task keep running.
+                task.subscribers.discard(websocket)
+                return
 
     except WebSocketDisconnect:
         pass
     except Exception:
         pass
+    finally:
+        # Unsubscribe from any active task.
+        task = _get_task(name, session_id)
+        if task:
+            task.subscribers.discard(websocket)
 
 
 routes = [

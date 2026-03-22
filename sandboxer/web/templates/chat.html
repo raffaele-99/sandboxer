@@ -44,9 +44,12 @@
       </div>
       <span class="text-xs text-slate-500 font-mono hidden sm:inline">{{ sandbox_name }}</span>
     </div>
-    <div class="flex items-center gap-2">
-      <span id="status-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
-      <span id="status-text" class="text-xs text-slate-400">Connecting...</span>
+    <div class="flex items-center gap-3">
+      <span id="agent-session-id" class="hidden text-xs font-mono text-slate-500 cursor-pointer hover:text-slate-300 transition-colors max-w-[200px] truncate" title="Click to copy agent session ID"></span>
+      <span class="flex items-center gap-2">
+        <span id="status-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+        <span id="status-text" class="text-xs text-slate-400">Connecting...</span>
+      </span>
     </div>
   </div>
 
@@ -92,6 +95,8 @@
   var currentAssistantEl = null;
   var isStreaming = false;
   var thinkingEl = null;
+  var agentBusy = false;
+  var agentSessionIdEl = document.getElementById("agent-session-id");
 
   // --- Session management ---
 
@@ -293,12 +298,14 @@
     var label = lines[0] || "";
     var output = lines.slice(1).join("\n").trim();
     var escaped_label = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    var html = '<div class="flex items-center gap-2 mb-1">'
+    var toggleId = "tool-" + Math.random().toString(36).substring(2, 8);
+    var html = '<div class="flex items-center gap-2 cursor-pointer select-none" onclick="var el=document.getElementById(\'' + toggleId + '\');if(el){el.classList.toggle(\'hidden\');this.querySelector(\'.tool-chevron\').classList.toggle(\'rotate-90\')}">'
+      + '<svg class="w-3 h-3 text-slate-500 shrink-0 tool-chevron transition-transform duration-150" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
       + '<svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>'
       + '<span class="font-mono text-slate-300">' + escaped_label + '</span></div>';
     if (output) {
       var escaped_out = output.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      html += '<pre class="bg-slate-900/50 rounded p-2 mt-1 overflow-x-auto text-xs text-slate-500 max-h-48 overflow-y-auto"><code>' + escaped_out + '</code></pre>';
+      html += '<pre id="' + toggleId + '" class="hidden bg-slate-900/50 rounded p-2 mt-1 overflow-x-auto text-xs text-slate-500 max-h-48 overflow-y-auto"><code>' + escaped_out + '</code></pre>';
     }
     return html;
   }
@@ -355,6 +362,23 @@
           if (data.title) {
             sessionTitleEl.textContent = data.title;
           }
+          // Show agent session ID if available
+          if (data.agent_session_id) {
+            agentSessionIdEl.textContent = data.agent_session_id;
+            agentSessionIdEl.title = "Agent session: " + data.agent_session_id + " (click to copy)";
+            agentSessionIdEl.classList.remove("hidden");
+            agentSessionIdEl.onclick = function() {
+              navigator.clipboard.writeText(data.agent_session_id).then(function() {
+                var orig = agentSessionIdEl.textContent;
+                agentSessionIdEl.textContent = "Copied!";
+                setTimeout(function() { agentSessionIdEl.textContent = orig; }, 1500);
+              });
+            };
+          }
+          // Show processing indicator if agent is still running.
+          if (data.agent_running) {
+            showThinking(0);
+          }
         }
       })
       .catch(function() {});
@@ -374,8 +398,10 @@
     ws.onopen = function() {
       setStatus("connected", "Connected");
       if (welcomeEl && welcomeEl.parentNode) welcomeEl.remove();
-      inputEl.disabled = false;
-      sendBtn.disabled = false;
+      if (!agentBusy) {
+        inputEl.disabled = false;
+        sendBtn.disabled = false;
+      }
       inputEl.focus();
     };
 
@@ -401,15 +427,37 @@
     };
   }
 
+  function setAgentBusy(busy) {
+    agentBusy = busy;
+    inputEl.disabled = busy || !ws || ws.readyState !== WebSocket.OPEN;
+    sendBtn.disabled = inputEl.disabled;
+  }
+
   function handleMessage(msg) {
     // --- Status heartbeat from server ---
     if (msg.type === "status") {
+      setAgentBusy(true);
       showThinking(msg.elapsed || 0);
       return;
     }
 
     // Any real event means the agent is responding — hide the indicator.
     hideThinking();
+
+    // Agent session ID (e.g. codex thread ID) — show in header for manual resume.
+    if (msg.type === "agent_session.id" && msg.agent_session_id) {
+      agentSessionIdEl.textContent = msg.agent_session_id;
+      agentSessionIdEl.title = "Agent session: " + msg.agent_session_id + " (click to copy)";
+      agentSessionIdEl.classList.remove("hidden");
+      agentSessionIdEl.onclick = function() {
+        navigator.clipboard.writeText(msg.agent_session_id).then(function() {
+          var orig = agentSessionIdEl.textContent;
+          agentSessionIdEl.textContent = "Copied!";
+          setTimeout(function() { agentSessionIdEl.textContent = orig; }, 1500);
+        });
+      };
+      return;
+    }
 
     // Session auto-created by server
     if (msg.type === "session.created" && msg.session_id) {
@@ -457,7 +505,7 @@
     } else if (msg.type === "turn.started") {
       // Don't start a streaming div here — wait for actual content.
     } else if (msg.type === "item.started" && msg.item) {
-      if (msg.item.type === "command_execution" && msg.item.command) {
+      if (msg.item.command) {
         var el = addMessage("tool", msg.item.command + " …");
         el.setAttribute("data-item-id", msg.item.id || "");
       }
@@ -475,11 +523,25 @@
         var output = msg.item.aggregated_output || "";
         if (output.length > 1000) output = output.substring(0, 1000) + "\n…";
         addMessage("tool", cmd + exitBadge + (output ? "\n" + output : ""));
+      } else if (msg.item.type === "file_edit" || msg.item.type === "file_create" || msg.item.type === "file_write") {
+        var filePath = msg.item.filepath || msg.item.path || msg.item.filename || "file";
+        var fileContent = msg.item.content || msg.item.text || "";
+        if (fileContent.length > 2000) fileContent = fileContent.substring(0, 2000) + "\n…";
+        addMessage("tool", (msg.item.type === "file_edit" ? "Edit: " : "Write: ") + filePath + (fileContent ? "\n" + fileContent : ""));
       } else if (msg.item.type === "tool_call") {
         addMessage("tool", (msg.item.name || msg.item.call_id || "tool"));
+      } else {
+        // Catch-all: display any unrecognized item type with available text content.
+        var fallbackText = msg.item.text || msg.item.content || msg.item.aggregated_output || "";
+        var fallbackLabel = msg.item.type || "item";
+        if (fallbackText) {
+          if (fallbackText.length > 2000) fallbackText = fallbackText.substring(0, 2000) + "\n…";
+          addMessage("tool", fallbackLabel + "\n" + fallbackText);
+        }
       }
     } else if (msg.type === "turn.completed") {
       finishAssistantMessage();
+      setAgentBusy(false);
       if (msg.usage) {
         var cached = msg.usage.cached_input_tokens || 0;
         var input = msg.usage.input_tokens || 0;
@@ -490,6 +552,7 @@
     // --- Common events ---
     } else if (msg.type === "result") {
       finishAssistantMessage();
+      setAgentBusy(false);
       if (msg.is_error && msg.result) {
         addMessage("error", msg.result);
       } else if (msg.result && !isStreaming) {
@@ -517,10 +580,11 @@
   formEl.addEventListener("submit", function(e) {
     e.preventDefault();
     var text = inputEl.value.trim();
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN || agentBusy) return;
 
     addMessage("user", text);
     ws.send(JSON.stringify({ type: "user", message: text }));
+    setAgentBusy(true);
     inputEl.value = "";
     inputEl.focus();
   });
