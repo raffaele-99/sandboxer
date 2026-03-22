@@ -188,9 +188,11 @@ def list_running_sandboxes() -> list[SandboxInfo]:
         results.append(
             SandboxInfo(
                 name=row.name,
+                template=row.template,
                 status=row.status,
                 agent=row.agent,
                 workspace=row.workspace,
+                created_at=row.created_at,
             )
         )
     return results

@@ -45,6 +45,14 @@ def load_template(name: str, base: Path | None = None) -> SandboxTemplate:
     return SandboxTemplate(**data)
 
 
+def rename_template(old_name: str, new_name: str, base: Path | None = None) -> None:
+    """Rename a template by saving under the new name and deleting the old files."""
+    template = load_template(old_name, base)
+    template = template.model_copy(update={"name": new_name})
+    save_template(template, base)
+    delete_template(old_name, base)
+
+
 def delete_template(name: str, base: Path | None = None) -> None:
     for path in (_yaml_path(name, base), _dockerfile_path(name, base)):
         path.unlink(missing_ok=True)

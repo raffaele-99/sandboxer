@@ -8,7 +8,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 from starlette.routing import Route
 
-from ...core.agents import delete_agent, list_agents, load_agent, save_agent
+from ...core.agents import delete_agent, list_agents, load_agent, rename_agent, save_agent
 from ...core.models import AgentProfile
 
 
@@ -95,8 +95,9 @@ async def agent_edit_page(request: Request) -> HTMLResponse:
 
 async def agent_update(request: Request) -> Response:
     """Handle agent edit form submission."""
-    name = request.path_params["name"]
+    old_name = request.path_params["name"]
     form = await request.form()
+    new_name = form.get("name", old_name).strip()
     agent_type = form.get("agent_type", "").strip()
 
     if not agent_type:
@@ -107,13 +108,15 @@ async def agent_update(request: Request) -> Response:
         return response
 
     profile = AgentProfile(
-        name=name,
+        name=new_name,
         agent_type=agent_type,
         api_key_env_var=form.get("api_key_env_var", "").strip(),
         auth_dir=form.get("auth_dir", "").strip() or None,
     )
 
     try:
+        if new_name != old_name:
+            await asyncio.to_thread(rename_agent, old_name, new_name)
         await asyncio.to_thread(save_agent, profile)
     except Exception as exc:
         response = Response(status_code=422)
@@ -123,7 +126,7 @@ async def agent_update(request: Request) -> Response:
         return response
 
     response = Response(status_code=204)
-    response.headers["HX-Redirect"] = f"/agents/{name}"
+    response.headers["HX-Redirect"] = f"/agents/{new_name}"
     response.headers["HX-Trigger"] = json.dumps(
         {"showToast": {"message": "Agent updated.", "level": "success"}}
     )

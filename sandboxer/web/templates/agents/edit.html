@@ -18,8 +18,9 @@
     {% endif %}
 
     <div>
-      <label class="block text-sm font-medium text-slate-300 mb-1.5">Name</label>
-      <div class="w-full bg-slate-700/50 border border-slate-600 text-slate-400 text-sm rounded-lg px-3 py-2.5">{{ agent.name }}</div>
+      <label for="name" class="block text-sm font-medium text-slate-300 mb-1.5">Name</label>
+      <input type="text" id="name" name="name" value="{{ agent.name }}" required
+             class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
     </div>
 
     <div>

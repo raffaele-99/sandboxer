@@ -13,6 +13,7 @@ from ...core.templates import (
     delete_template,
     list_templates,
     load_template,
+    rename_template,
     render_dockerfile,
     save_template,
 )
@@ -111,14 +112,15 @@ async def template_edit_page(request: Request) -> HTMLResponse:
 
 async def template_update(request: Request) -> Response:
     """Handle template edit form submission."""
-    name = request.path_params["name"]
+    old_name = request.path_params["name"]
     form = await request.form()
+    new_name = form.get("name", old_name).strip()
 
     def _split(val: str) -> list[str]:
         return [line.strip() for line in val.split("\n") if line.strip()]
 
     template = SandboxTemplate(
-        name=name,
+        name=new_name,
         description=form.get("description", "").strip(),
         base_image=form.get("base_image", "").strip()
         or "docker/sandbox-templates:latest",
@@ -132,7 +134,10 @@ async def template_update(request: Request) -> Response:
     )
 
     try:
-        await asyncio.to_thread(save_template, template)
+        if new_name != old_name:
+            await asyncio.to_thread(rename_template, old_name, new_name)
+        else:
+            await asyncio.to_thread(save_template, template)
     except Exception as exc:
         response = Response(status_code=422)
         response.headers["HX-Trigger"] = json.dumps(
@@ -140,8 +145,19 @@ async def template_update(request: Request) -> Response:
         )
         return response
 
+    # If renamed, we still need to save the updated fields under the new name.
+    if new_name != old_name:
+        try:
+            await asyncio.to_thread(save_template, template)
+        except Exception as exc:
+            response = Response(status_code=422)
+            response.headers["HX-Trigger"] = json.dumps(
+                {"showToast": {"message": str(exc), "level": "error"}}
+            )
+            return response
+
     response = Response(status_code=204)
-    response.headers["HX-Redirect"] = f"/templates/{name}"
+    response.headers["HX-Redirect"] = f"/templates/{new_name}"
     response.headers["HX-Trigger"] = json.dumps(
         {"showToast": {"message": "Template updated.", "level": "success"}}
     )

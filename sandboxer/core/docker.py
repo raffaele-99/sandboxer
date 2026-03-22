@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 
 import containerkit
 from containerkit import Mount, RunOptions, Runtime
@@ -38,7 +39,9 @@ class SandboxRow:
     status: str
     image: str
     agent: str = ""
+    template: str = ""
     workspace: str = ""
+    created_at: datetime | None = None
 
 
 class DockerError(Exception):
@@ -202,12 +205,22 @@ def _list_sandboxes_docker() -> list[SandboxRow]:
                 k, v = part.split("=", 1)
                 label_map[k] = v
 
+        created_at = None
+        raw_created = data.get("CreatedAt", "")
+        if raw_created:
+            try:
+                created_at = datetime.fromisoformat(raw_created.replace(" +", "+").replace(" -", "-"))
+            except (ValueError, TypeError):
+                pass
+
         rows.append(SandboxRow(
             name=data.get("Names", ""),
             status=data.get("State", data.get("Status", "")),
             image=data.get("Image", ""),
             agent=label_map.get(LABEL_AGENT, ""),
+            template=label_map.get(LABEL_TEMPLATE, ""),
             workspace=label_map.get(LABEL_WORKSPACE, ""),
+            created_at=created_at,
         ))
 
     return rows
@@ -238,12 +251,25 @@ def _list_sandboxes_apple() -> list[SandboxRow]:
         if isinstance(image, dict):
             image_ref = image.get("reference", "")
 
+        created_at = None
+        started_raw = c.get("startedDate")
+        if started_raw:
+            try:
+                # Apple Containers uses Mach absolute time (seconds since 2001-01-01).
+                _APPLE_EPOCH = datetime(2001, 1, 1)
+                from datetime import timedelta
+                created_at = _APPLE_EPOCH + timedelta(seconds=float(started_raw))
+            except (ValueError, TypeError):
+                pass
+
         rows.append(SandboxRow(
             name=config.get("id", ""),
             status=c.get("status", ""),
             image=image_ref,
             agent=labels.get(LABEL_AGENT, ""),
+            template=labels.get(LABEL_TEMPLATE, ""),
             workspace=labels.get(LABEL_WORKSPACE, ""),
+            created_at=created_at,
         ))
 
     return rows

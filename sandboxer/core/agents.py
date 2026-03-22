@@ -42,6 +42,14 @@ def load_agent(name: str, base: Path | None = None) -> AgentProfile:
     return AgentProfile(**data)
 
 
+def rename_agent(old_name: str, new_name: str, base: Path | None = None) -> None:
+    """Rename an agent by saving under the new name and deleting the old file."""
+    agent = load_agent(old_name, base)
+    agent = agent.model_copy(update={"name": new_name})
+    save_agent(agent, base)
+    delete_agent(old_name, base)
+
+
 def delete_agent(name: str, base: Path | None = None) -> None:
     _yaml_path(name, base).unlink(missing_ok=True)
 
