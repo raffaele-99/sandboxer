@@ -157,10 +157,16 @@ class TestTemplateMarketplace:
         )
         push_template("pushable", "registry.io/pushable:v1", base=tmp_path)
 
-        # Verify image was tagged and pushed.
+        # Verify image was tagged and pushed (runtime-agnostic).
         calls = [c[0][0] for c in mock_run.call_args_list]
-        assert ["docker", "tag", "img:latest", "registry.io/pushable:v1"] in calls
-        assert ["docker", "image", "push", "registry.io/pushable:v1"] in calls
+        # Check the commands contain the right args regardless of binary name.
+        tag_calls = [c for c in calls if "tag" in c]
+        push_calls = [c for c in calls if "push" in c]
+        assert len(tag_calls) == 1
+        assert "img:latest" in tag_calls[0]
+        assert "registry.io/pushable:v1" in tag_calls[0]
+        assert len(push_calls) == 1
+        assert "registry.io/pushable:v1" in push_calls[0]
 
         # Verify registry_source was saved.
         loaded = load_template("pushable", base=tmp_path)
@@ -174,9 +180,10 @@ class TestTemplateMarketplace:
         assert tmpl.base_image == "registry.io/sandbox:v2"
         assert tmpl.registry_source == "registry.io/sandbox:v2"
 
-        # Verify image was pulled.
+        # Verify image was pulled (runtime-agnostic).
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["docker", "image", "pull", "registry.io/sandbox:v2"]
+        assert "pull" in cmd
+        assert "registry.io/sandbox:v2" in cmd
 
     @patch("sandboxer.core.docker.subprocess.run")
     def test_pull_template_auto_name(self, mock_run, tmp_path: Path) -> None:

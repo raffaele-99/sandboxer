@@ -1,10 +1,15 @@
-"""Tests for sandboxer.core.cleanup."""
+"""Tests for sandboxer.core.cleanup.
+
+Integration tests (FindOrphans, CleanupOrphans) require a container runtime.
+TTL/idle tests use mocked metadata.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from subprocess import CompletedProcess
 from unittest.mock import patch
+
+import pytest
 
 from sandboxer.core.cleanup import (
     cleanup_orphans,
@@ -13,63 +18,56 @@ from sandboxer.core.cleanup import (
     find_idle,
     find_orphans,
 )
+from sandboxer.core.docker import create, is_docker_available, remove, stop
 from sandboxer.core.metadata import SandboxMetadata, save_metadata
 
 
-def _mock_run(returncode: int = 0, stdout: str = "", stderr: str = ""):
-    return CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
-
-
+@pytest.mark.integration
 class TestFindOrphans:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_finds_stopped_sandboxer_containers(self, mock_run) -> None:
-        output = (
-            "NAME                          STATUS     IMAGE\n"
-            "sandboxer-py-dev-20260315     running    img:latest\n"
-            "sandboxer-old-thing-20260314  stopped    img:latest\n"
-            "other-container               stopped    img:latest\n"
-        )
-        mock_run.return_value = _mock_run(stdout=output)
-        orphans = find_orphans()
-        assert orphans == ["sandboxer-old-thing-20260314"]
+    @pytest.fixture(autouse=True)
+    def _require_runtime(self):
+        if not is_docker_available():
+            pytest.skip("No container runtime available")
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_no_orphans(self, mock_run) -> None:
-        output = (
-            "NAME                          STATUS     IMAGE\n"
-            "sandboxer-py-dev-20260315     running    img:latest\n"
-        )
-        mock_run.return_value = _mock_run(stdout=output)
-        assert find_orphans() == []
+    def test_finds_stopped_sandboxer_containers(self) -> None:
+        name = create("alpine:latest", name="sandboxer-test-orphan")
+        try:
+            stop(name)
+            orphans = find_orphans()
+            assert name in orphans
+        finally:
+            try:
+                remove(name)
+            except Exception:
+                pass
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_ignores_non_sandboxer_containers(self, mock_run) -> None:
-        output = (
-            "NAME              STATUS     IMAGE\n"
-            "my-container      stopped    img:latest\n"
-        )
-        mock_run.return_value = _mock_run(stdout=output)
-        assert find_orphans() == []
+    def test_running_not_orphan(self) -> None:
+        name = create("alpine:latest", name="sandboxer-test-running")
+        try:
+            orphans = find_orphans()
+            assert name not in orphans
+        finally:
+            try:
+                remove(name)
+            except Exception:
+                pass
 
 
+@pytest.mark.integration
 class TestCleanupOrphans:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_removes_specified_names(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        removed = cleanup_orphans(["sandboxer-old-1", "sandboxer-old-2"])
-        assert removed == ["sandboxer-old-1", "sandboxer-old-2"]
-        assert mock_run.call_count == 2
+    @pytest.fixture(autouse=True)
+    def _require_runtime(self):
+        if not is_docker_available():
+            pytest.skip("No container runtime available")
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_handles_removal_failure(self, mock_run) -> None:
-        # First remove succeeds, second fails.
-        mock_run.side_effect = [
-            _mock_run(),
-            _mock_run(returncode=1, stderr="error"),
-        ]
-        removed = cleanup_orphans(["good", "bad"])
-        # "bad" raises DockerSandboxError which is caught.
-        assert "good" in removed
+    def test_removes_stopped_containers(self) -> None:
+        name = create("alpine:latest", name="sandboxer-test-cleanup")
+        stop(name)
+        removed = cleanup_orphans([name])
+        assert name in removed
+
+        from sandboxer.core.docker import sandbox_exists
+        assert not sandbox_exists(name)
 
 
 class TestFindExpired:
@@ -136,11 +134,10 @@ class TestFindIdle:
 
 
 class TestFindAllCleanupCandidates:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_returns_all_categories(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(
-            stdout="NAME              STATUS     IMAGE\n"
-        )
+    @pytest.mark.integration
+    def test_returns_all_categories(self) -> None:
+        if not is_docker_available():
+            pytest.skip("No container runtime available")
         with patch("sandboxer.core.metadata.list_metadata", return_value=[]):
             result = find_all_cleanup_candidates()
         assert "orphans" in result

@@ -16,7 +16,7 @@ from .core.cleanup import (
     find_orphans,
 )
 from .core.config import GlobalConfig, config_dir
-from .core.docker import is_docker_available, is_sandbox_feature_available
+from .core.docker import get_runtime, is_docker_available
 from .core.models import AgentProfile, SandboxTemplate
 from .core.mount_allowlist import (
     add_to_allowlist,
@@ -46,7 +46,7 @@ _ctx = {"help_option_names": ["--help", "-h"]}
 
 app = typer.Typer(
     name="sandboxer",
-    help="Manage Docker Sandbox environments for autonomous agents.",
+    help="Manage sandboxed container environments for autonomous agents.",
     add_completion=False,
     rich_markup_mode="rich",
     invoke_without_command=True,
@@ -67,10 +67,7 @@ def _err(msg: str) -> None:
 
 def _check_docker() -> None:
     if not is_docker_available():
-        _err("error: docker is not available. Install Docker Desktop and ensure it is running.")
-        raise typer.Exit(1)
-    if not is_sandbox_feature_available():
-        _err("error: 'docker sandbox' is not available. Docker Desktop 4.58+ required.")
+        _err("error: no container runtime found. Install Docker or Apple Containers.")
         raise typer.Exit(1)
 
 
@@ -550,12 +547,34 @@ def serve_cmd(
     app_instance = create_app(token=token)
 
     scheme = "https" if ssl_certfile else "http"
-    display_host = "localhost" if host == "0.0.0.0" else host
-    url = f"{scheme}://{display_host}:{port}/?token={token}"
 
     typer.echo(f"Sandboxer web UI starting on {scheme}://{host}:{port}")
     typer.echo(f"Auth token: {token}")
-    typer.echo(f"Open: {url}")
+
+    if host == "0.0.0.0":
+        import socket
+
+        addrs = set()
+        addrs.add("127.0.0.1")
+        try:
+            import subprocess as _sp
+
+            out = _sp.run(
+                ["ifconfig"], capture_output=True, text=True,
+            ).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("inet "):
+                    addr = line.split()[1]
+                    if not addr.startswith("127."):
+                        addrs.add(addr)
+        except Exception:
+            pass
+
+        for addr in sorted(addrs, key=lambda a: (not a.startswith("127"), a)):
+            typer.echo(f"  {scheme}://{addr}:{port}/?token={token}")
+    else:
+        typer.echo(f"  {scheme}://{host}:{port}/?token={token}")
 
     kwargs: dict[str, object] = {
         "host": host,
@@ -582,6 +601,13 @@ def show_config() -> None:
     typer.echo(f"Credential proxy port: {cfg.credential_proxy_port}")
     typer.echo(f"Auto-cleanup orphans: {cfg.auto_cleanup_orphans}")
     typer.echo(f"Network mode: {cfg.network_mode}")
+    typer.echo(f"Container backend: {cfg.container_backend}")
+    try:
+        rt = get_runtime()
+        typer.echo(f"Active runtime: {rt.name} ({rt.binary})")
+    except Exception:
+        typer.echo("Active runtime: (unavailable)")
+    typer.echo(f"DNS server: {cfg.dns_server or '(default)'}")
     typer.echo(f"Default TTL: {cfg.default_ttl_seconds or '(none)'}")
     typer.echo(f"Default idle timeout: {cfg.default_idle_timeout_seconds or '(none)'}")
 

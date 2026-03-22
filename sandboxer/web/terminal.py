@@ -41,15 +41,19 @@ class TerminalSession:
         self._env = env
 
     def start(self) -> None:
+        from ..core.docker import get_runtime
+
         master, slave = pty.openpty()
         self._master_fd = master
 
-        cmd = ["docker", "exec", "-it"]
-        if self._env:
-            for key, value in self._env.items():
-                cmd.extend(["-e", f"{key}={value}"])
-        cmd.append(self.sandbox_name)
-        cmd.extend(self._command)
+        rt = get_runtime()
+        cmd = rt.build_exec_command(
+            self.sandbox_name,
+            self._command,
+            interactive=True,
+            tty=True,
+            env=self._env,
+        )
 
         self._process = subprocess.Popen(
             cmd,

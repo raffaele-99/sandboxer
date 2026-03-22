@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
@@ -94,6 +95,59 @@ async def template_detail_page(request: Request) -> HTMLResponse:
     )
 
 
+async def template_edit_page(request: Request) -> HTMLResponse:
+    """Template edit form."""
+    name = request.path_params["name"]
+    try:
+        template = await asyncio.to_thread(load_template, name)
+    except FileNotFoundError:
+        return HTMLResponse("Template not found", status_code=404)
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "templates/edit.html",
+        {"template": template, "error": None},
+    )
+
+
+async def template_update(request: Request) -> Response:
+    """Handle template edit form submission."""
+    name = request.path_params["name"]
+    form = await request.form()
+
+    def _split(val: str) -> list[str]:
+        return [line.strip() for line in val.split("\n") if line.strip()]
+
+    template = SandboxTemplate(
+        name=name,
+        description=form.get("description", "").strip(),
+        base_image=form.get("base_image", "").strip()
+        or "docker/sandbox-templates:latest",
+        agent_type=form.get("agent_type", "").strip() or None,
+        packages=_split(form.get("packages", "")),
+        pip_packages=_split(form.get("pip_packages", "")),
+        npm_packages=_split(form.get("npm_packages", "")),
+        network=form.get("network", "bridge").strip(),
+        allow_sudo="allow_sudo" in form,
+        read_only_workspace="read_only_workspace" in form,
+    )
+
+    try:
+        await asyncio.to_thread(save_template, template)
+    except Exception as exc:
+        response = Response(status_code=422)
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": str(exc), "level": "error"}}
+        )
+        return response
+
+    response = Response(status_code=204)
+    response.headers["HX-Redirect"] = f"/templates/{name}"
+    response.headers["HX-Trigger"] = json.dumps(
+        {"showToast": {"message": "Template updated.", "level": "success"}}
+    )
+    return response
+
+
 async def template_delete(request: Request) -> Response:
     """Delete a template."""
     name = request.path_params["name"]
@@ -127,6 +181,8 @@ routes = [
     Route("/templates/new", template_create_page),
     Route("/templates/", template_create, methods=["POST"]),
     Route("/templates/{name}", template_detail_page),
+    Route("/templates/{name}", template_update, methods=["PUT"]),
     Route("/templates/{name}", template_delete, methods=["DELETE"]),
+    Route("/templates/{name}/edit", template_edit_page),
     Route("/api/templates", template_list_partial),
 ]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
@@ -78,6 +79,57 @@ async def agent_detail_page(request: Request) -> HTMLResponse:
     )
 
 
+async def agent_edit_page(request: Request) -> HTMLResponse:
+    """Agent edit form."""
+    name = request.path_params["name"]
+    try:
+        agent = await asyncio.to_thread(load_agent, name)
+    except FileNotFoundError:
+        return HTMLResponse("Agent not found", status_code=404)
+    return request.app.state.templates.TemplateResponse(
+        request,
+        "agents/edit.html",
+        {"agent": agent, "error": None},
+    )
+
+
+async def agent_update(request: Request) -> Response:
+    """Handle agent edit form submission."""
+    name = request.path_params["name"]
+    form = await request.form()
+    agent_type = form.get("agent_type", "").strip()
+
+    if not agent_type:
+        response = Response(status_code=422)
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": "Agent type is required.", "level": "error"}}
+        )
+        return response
+
+    profile = AgentProfile(
+        name=name,
+        agent_type=agent_type,
+        api_key_env_var=form.get("api_key_env_var", "").strip(),
+        auth_dir=form.get("auth_dir", "").strip() or None,
+    )
+
+    try:
+        await asyncio.to_thread(save_agent, profile)
+    except Exception as exc:
+        response = Response(status_code=422)
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": str(exc), "level": "error"}}
+        )
+        return response
+
+    response = Response(status_code=204)
+    response.headers["HX-Redirect"] = f"/agents/{name}"
+    response.headers["HX-Trigger"] = json.dumps(
+        {"showToast": {"message": "Agent updated.", "level": "success"}}
+    )
+    return response
+
+
 async def agent_delete(request: Request) -> Response:
     """Delete an agent profile."""
     name = request.path_params["name"]
@@ -111,6 +163,8 @@ routes = [
     Route("/agents/new", agent_create_page),
     Route("/agents/", agent_create, methods=["POST"]),
     Route("/agents/{name}", agent_detail_page),
+    Route("/agents/{name}", agent_update, methods=["PUT"]),
     Route("/agents/{name}", agent_delete, methods=["DELETE"]),
+    Route("/agents/{name}/edit", agent_edit_page),
     Route("/api/agents", agent_list_partial),
 ]

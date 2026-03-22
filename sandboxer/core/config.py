@@ -45,6 +45,8 @@ class GlobalConfig:
     auto_cleanup_orphans: bool = True
     network_mode: str = "bridge"
     container_runtime: str = "runsc"  # "runsc" for gVisor, "" for default
+    container_backend: str = "auto"  # "auto", "docker", or "apple"
+    dns_server: str | None = None  # e.g. "8.8.8.8" — useful when VPN breaks gateway DNS
     default_ttl_seconds: int | None = None
     default_idle_timeout_seconds: int | None = None
 
@@ -58,6 +60,8 @@ class GlobalConfig:
             "auto_cleanup_orphans": self.auto_cleanup_orphans,
             "network_mode": self.network_mode,
             "container_runtime": self.container_runtime,
+            "container_backend": self.container_backend,
+            "dns_server": self.dns_server,
             "default_ttl_seconds": self.default_ttl_seconds,
             "default_idle_timeout_seconds": self.default_idle_timeout_seconds,
         }
@@ -76,6 +80,8 @@ class GlobalConfig:
             auto_cleanup_orphans=data.get("auto_cleanup_orphans", True),
             network_mode=data.get("network_mode", "bridge"),
             container_runtime=data.get("container_runtime", "runsc"),
+            container_backend=data.get("container_backend", "auto"),
+            dns_server=data.get("dns_server"),
             default_ttl_seconds=data.get("default_ttl_seconds"),
             default_idle_timeout_seconds=data.get("default_idle_timeout_seconds"),
         )

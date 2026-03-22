@@ -1,6 +1,6 @@
-"""Integration tests for orphan cleanup with real docker sandbox calls.
+"""Integration tests for orphan cleanup — requires a container runtime.
 
-Skipped unless Docker Desktop with sandbox support is available.
+Run with ``pytest -m integration``.
 """
 from __future__ import annotations
 
@@ -9,34 +9,26 @@ import time
 import pytest
 
 from sandboxer.core.cleanup import find_orphans
-from sandboxer.core.docker import (
-    create,
-    is_docker_available,
-    is_sandbox_feature_available,
-    remove,
-    stop,
-)
+from sandboxer.core.docker import create, is_docker_available, remove, stop
 
-_sandbox_ok = is_docker_available() and is_sandbox_feature_available()
+pytestmark = pytest.mark.integration
 
-skip_no_sandbox = pytest.mark.skipif(
-    not _sandbox_ok, reason="docker sandbox not available"
-)
 
-pytestmark = [pytest.mark.integration, skip_no_sandbox]
+@pytest.fixture(autouse=True)
+def _require_runtime():
+    if not is_docker_available():
+        pytest.skip("No container runtime available")
 
 
 class TestFindOrphansReal:
     def test_find_orphans_returns_list(self) -> None:
-        """find_orphans should return a list without error."""
         result = find_orphans()
         assert isinstance(result, list)
 
     def test_stopped_sandbox_detected_as_orphan(self, tmp_path) -> None:
-        """A stopped sandboxer-prefixed sandbox should be found as an orphan."""
         name = f"sandboxer-orphan-test-{int(time.time())}"
         try:
-            create(template="", workspace=str(tmp_path), name=name)
+            create("alpine:latest", name=name)
             stop(name)
 
             orphans = find_orphans()

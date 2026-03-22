@@ -1,231 +1,122 @@
-"""Tests for sandboxer.core.docker — subprocess calls are mocked."""
+"""Integration tests for sandboxer.core.docker — requires a container runtime."""
 from __future__ import annotations
-
-from subprocess import CompletedProcess
-from unittest.mock import patch
 
 import pytest
 
 from sandboxer.core.docker import (
-    DockerSandboxError,
-    SandboxRow,
-    build_template,
+    DockerError,
     create,
+    get_runtime,
     is_docker_available,
-    is_sandbox_feature_available,
     list_sandboxes,
-    pull_image,
-    push_image,
     remove,
     sandbox_exists,
     sandbox_stats,
-    save_as_template,
     stop,
-    tag_image,
 )
 
+pytestmark = pytest.mark.integration
 
-def _mock_run(returncode: int = 0, stdout: str = "", stderr: str = ""):
-    return CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+
+@pytest.fixture(autouse=True)
+def _require_runtime():
+    if not is_docker_available():
+        pytest.skip("No container runtime available")
+
+
+@pytest.fixture()
+def sandbox():
+    """Create a temporary sandbox and clean it up after the test."""
+    name = create(
+        "alpine:latest",
+        name="sandboxer-test-docker",
+        labels={"sandboxer.agent": "shell"},
+    )
+    yield name
+    try:
+        remove(name)
+    except Exception:
+        pass
+
+
+class TestRuntime:
+    def test_get_runtime(self) -> None:
+        rt = get_runtime()
+        assert rt.name in ("docker", "apple")
+        assert rt.binary in ("docker", "container")
 
 
 class TestCreate:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_basic_create(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(stdout="my-sandbox\n")
-        name = create("claude", "/home/user/project", template="my-template:latest", name="my-sandbox")
-        assert name == "my-sandbox"
-        cmd = mock_run.call_args[0][0]
-        assert cmd == [
-            "docker", "sandbox", "create",
-            "--name", "my-sandbox",
-            "-t", "my-template:latest",
-            "claude", "/home/user/project",
-        ]
+    def test_basic_create_and_remove(self) -> None:
+        name = create("alpine:latest", name="sandboxer-test-create")
+        try:
+            assert name == "sandboxer-test-create"
+            assert sandbox_exists(name)
+        finally:
+            remove(name)
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_create_without_template(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(stdout="my-sandbox\n")
-        create("claude", "/workspace", name="my-sandbox")
-        cmd = mock_run.call_args[0][0]
-        assert "-t" not in cmd
-        assert cmd == ["docker", "sandbox", "create", "--name", "my-sandbox", "claude", "/workspace"]
+    def test_create_with_volumes(self, tmp_path) -> None:
+        name = create(
+            "alpine:latest",
+            name="sandboxer-test-vols",
+            volumes={str(tmp_path): "/mnt/test"},
+        )
+        try:
+            assert sandbox_exists(name)
+        finally:
+            remove(name)
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_create_read_only(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(stdout="ro-box\n")
-        create("claude", "/workspace", name="ro-box", read_only=True)
-        cmd = mock_run.call_args[0][0]
-        assert any(arg.endswith(":ro") for arg in cmd)
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_create_failure(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(returncode=1, stderr="no such template")
-        with pytest.raises(DockerSandboxError, match="no such template"):
-            create("claude", "/workspace")
+    def test_create_readonly_volume(self, tmp_path) -> None:
+        name = create(
+            "alpine:latest",
+            name="sandboxer-test-ro",
+            volumes={str(tmp_path): "/mnt/test:ro"},
+        )
+        try:
+            assert sandbox_exists(name)
+        finally:
+            remove(name)
 
 
 class TestListSandboxes:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_parse_table_output(self, mock_run) -> None:
-        output = (
-            "NAME                STATUS     IMAGE\n"
-            "sandboxer-py-dev    running    docker/sandbox-templates:latest\n"
-            "sandboxer-node      stopped    docker/sandbox-templates:node\n"
-        )
-        mock_run.return_value = _mock_run(stdout=output)
+    def test_list_includes_managed(self, sandbox) -> None:
         rows = list_sandboxes()
-        assert len(rows) == 2
-        assert rows[0] == SandboxRow(
-            name="sandboxer-py-dev",
-            status="running",
-            image="docker/sandbox-templates:latest",
-        )
-        assert rows[1].status == "stopped"
+        names = [r.name for r in rows]
+        assert sandbox in names
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_empty_output(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(stdout="NAME  STATUS  IMAGE\n")
+    def test_list_returns_labels(self, sandbox) -> None:
         rows = list_sandboxes()
-        assert rows == []
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_command_failure(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(returncode=1, stderr="not supported")
-        rows = list_sandboxes()
-        assert rows == []
+        row = next(r for r in rows if r.name == sandbox)
+        assert row.agent == "shell"
 
 
 class TestStopAndRemove:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_stop(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        stop("my-sandbox")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["docker", "sandbox", "stop", "my-sandbox"]
+    def test_stop(self, sandbox) -> None:
+        stop(sandbox)
+        rows = list_sandboxes()
+        row = next(r for r in rows if r.name == sandbox)
+        assert row.status in ("exited", "stopped")
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_remove(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        remove("my-sandbox")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["docker", "sandbox", "rm", "my-sandbox"]
+    def test_remove(self) -> None:
+        name = create("alpine:latest", name="sandboxer-test-rm")
+        remove(name)
+        assert not sandbox_exists(name)
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_stop_failure(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(returncode=1, stderr="no such sandbox")
-        with pytest.raises(DockerSandboxError):
-            stop("nonexistent")
-
-
-class TestSaveAsTemplate:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_save(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        save_as_template("my-sandbox", "my-registry/my-template:v1")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == [
-            "docker", "sandbox", "save",
-            "my-sandbox", "my-registry/my-template:v1",
-        ]
-
-
-class TestBuildTemplate:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_build(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        build_template("/tmp/Dockerfile", "my-image:latest", "/tmp")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == [
-            "docker", "build", "-t", "my-image:latest",
-            "-f", "/tmp/Dockerfile", "/tmp",
-        ]
-
-
-class TestSandboxExists:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_exists(self, mock_run) -> None:
-        output = (
-            "NAME              STATUS     IMAGE\n"
-            "my-sandbox        running    img:latest\n"
-        )
-        mock_run.return_value = _mock_run(stdout=output)
-        assert sandbox_exists("my-sandbox") is True
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_not_exists(self, mock_run) -> None:
-        output = "NAME  STATUS  IMAGE\n"
-        mock_run.return_value = _mock_run(stdout=output)
-        assert sandbox_exists("nope") is False
+    def test_stop_nonexistent(self) -> None:
+        with pytest.raises(DockerError):
+            stop("sandboxer-nonexistent-xyz")
 
 
 class TestSandboxStats:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_stats(self, mock_run) -> None:
-        stats_json = (
-            '{"Name":"my-sandbox","CPUPerc":"1.23%","MemUsage":"100MiB / 4GiB",'
-            '"MemPerc":"2.50%","NetIO":"1kB / 2kB","BlockIO":"3kB / 4kB","PIDs":"5"}'
-        )
-        mock_run.return_value = _mock_run(stdout=stats_json)
-        result = sandbox_stats("my-sandbox")
-        assert result["name"] == "my-sandbox"
-        assert result["cpu_percent"] == "1.23%"
-        assert result["mem_usage"] == "100MiB / 4GiB"
-        assert result["pids"] == "5"
-        cmd = mock_run.call_args[0][0]
-        assert cmd[:2] == ["docker", "stats"]
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_stats_failure(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(returncode=1, stderr="no such container")
-        with pytest.raises(DockerSandboxError):
-            sandbox_stats("nonexistent")
+    def test_stats(self, sandbox) -> None:
+        result = sandbox_stats(sandbox)
+        assert result["name"] == sandbox
+        assert "cpu_percent" in result
 
 
-class TestImageOperations:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_tag_image(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        tag_image("source:latest", "target:v1")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["docker", "tag", "source:latest", "target:v1"]
+class TestSandboxExists:
+    def test_exists(self, sandbox) -> None:
+        assert sandbox_exists(sandbox) is True
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_push_image(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        push_image("myregistry/img:v1")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["docker", "image", "push", "myregistry/img:v1"]
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_pull_image(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        pull_image("myregistry/img:v1")
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["docker", "image", "pull", "myregistry/img:v1"]
-
-
-class TestDockerAvailability:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_docker_available(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        assert is_docker_available() is True
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_docker_not_available(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(returncode=1)
-        assert is_docker_available() is False
-
-    @patch("sandboxer.core.docker.subprocess.run", side_effect=FileNotFoundError)
-    def test_docker_not_installed(self, mock_run) -> None:
-        assert is_docker_available() is False
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_sandbox_feature_available(self, mock_run) -> None:
-        mock_run.return_value = _mock_run()
-        assert is_sandbox_feature_available() is True
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_sandbox_feature_not_available(self, mock_run) -> None:
-        mock_run.return_value = _mock_run(returncode=1)
-        assert is_sandbox_feature_available() is False
+    def test_not_exists(self) -> None:
+        assert sandbox_exists("sandboxer-nonexistent-xyz") is False

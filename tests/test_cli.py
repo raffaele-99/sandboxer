@@ -1,22 +1,23 @@
-"""Tests for sandboxer.cli — uses typer's CliRunner."""
+"""Tests for sandboxer.cli — uses typer's CliRunner.
+
+Tests that require container operations are marked as integration tests.
+"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from subprocess import CompletedProcess
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from sandboxer.cli import app
 from sandboxer.core.agents import save_agent
+from sandboxer.core.docker import is_docker_available
 from sandboxer.core.models import AgentProfile, SandboxTemplate
 from sandboxer.core.templates import save_template
 
 runner = CliRunner()
-
-
-def _mock_run(returncode: int = 0, stdout: str = "", stderr: str = ""):
-    return CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 class TestConfigCommand:
@@ -25,6 +26,7 @@ class TestConfigCommand:
             result = runner.invoke(app, ["config"])
             assert result.exit_code == 0
             assert "Config dir:" in result.output
+            assert "Container backend:" in result.output
             assert "Default TTL:" in result.output
             assert "Default idle timeout:" in result.output
 
@@ -75,40 +77,6 @@ class TestTemplateCommands:
             assert result.exit_code == 0
             assert "Deleted" in result.output
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_push_template(self, mock_run, tmp_path: Path) -> None:
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-            _mock_run(),  # docker tag
-            _mock_run(),  # docker image push
-        ]
-        with patch("sandboxer.core.config.config_dir", return_value=tmp_path):
-            save_template(
-                SandboxTemplate(name="pushable", base_image="img:latest"),
-                base=tmp_path,
-            )
-            result = runner.invoke(app, [
-                "template", "push", "pushable", "registry.io/pushable:v1",
-            ])
-            assert result.exit_code == 0
-            assert "Pushed" in result.output
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_pull_template(self, mock_run, tmp_path: Path) -> None:
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-            _mock_run(),  # docker image pull
-        ]
-        with patch("sandboxer.core.config.config_dir", return_value=tmp_path):
-            result = runner.invoke(app, [
-                "template", "pull", "registry.io/sandbox:v2",
-                "--as", "pulled-tmpl",
-            ])
-            assert result.exit_code == 0
-            assert "Pulled" in result.output
-
 
 class TestAgentCommands:
     def test_create_and_list(self, tmp_path: Path) -> None:
@@ -153,54 +121,8 @@ class TestMountCommands:
             assert str(tmp_path) in result.output
 
 
-class TestCleanupCommand:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_cleanup_dry_run(self, mock_run) -> None:
-        # Mock docker availability check + sandbox ls.
-        ls_output = (
-            "NAME                          STATUS     IMAGE\n"
-            "sandboxer-old-20260314        stopped    img:latest\n"
-        )
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-            _mock_run(stdout=ls_output),  # docker sandbox ls (orphans)
-        ]
-        with patch("sandboxer.core.metadata.list_metadata", return_value=[]):
-            result = runner.invoke(app, ["cleanup", "--dry-run"])
-            assert result.exit_code == 0
-            assert "sandboxer-old-20260314" in result.output
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_cleanup_expired_flag(self, mock_run) -> None:
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-        ]
-        with patch("sandboxer.cli.find_expired", return_value=[]):
-            result = runner.invoke(app, ["cleanup", "--expired", "--dry-run"])
-            assert result.exit_code == 0
-            assert "No matching" in result.output
-
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_cleanup_idle_flag(self, mock_run) -> None:
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-        ]
-        with patch("sandboxer.cli.find_idle", return_value=[]):
-            result = runner.invoke(app, ["cleanup", "--idle", "--dry-run"])
-            assert result.exit_code == 0
-            assert "No matching" in result.output
-
-
 class TestSandboxCreateCommand:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_create_validates_mount(self, mock_run, tmp_path: Path) -> None:
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-        ]
+    def test_create_validates_mount(self, tmp_path: Path) -> None:
         with patch("sandboxer.core.config.config_dir", return_value=tmp_path):
             save_template(SandboxTemplate(name="tmpl"), base=tmp_path)
             save_agent(
@@ -215,49 +137,67 @@ class TestSandboxCreateCommand:
             assert result.exit_code == 1
 
 
+@pytest.mark.integration
 class TestSandboxStatsCommand:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_stats(self, mock_run) -> None:
-        stats_json = (
-            '{"Name":"my-box","CPUPerc":"1.0%","MemUsage":"100MiB / 4GiB",'
-            '"MemPerc":"2.5%","NetIO":"1kB / 2kB","BlockIO":"0B / 0B","PIDs":"5"}'
-        )
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-            _mock_run(stdout=stats_json),  # docker stats
-        ]
-        result = runner.invoke(app, ["sandbox", "stats", "my-box"])
-        assert result.exit_code == 0
-        assert "1.0%" in result.output
-        assert "100MiB / 4GiB" in result.output
+    @pytest.fixture(autouse=True)
+    def _require_runtime(self):
+        if not is_docker_available():
+            pytest.skip("No container runtime available")
+
+    def test_stats(self, tmp_path: Path) -> None:
+        from sandboxer.core.config import GlobalConfig
+        from sandboxer.core.docker import create, remove
+        from sandboxer.core.models import AgentProfile, SandboxTemplate
+
+        name = create("alpine:latest", name="sandboxer-test-cli-stats")
+        try:
+            result = runner.invoke(app, ["sandbox", "stats", name])
+            assert result.exit_code == 0
+            assert "CPU:" in result.output
+        finally:
+            try:
+                remove(name)
+            except Exception:
+                pass
 
 
+@pytest.mark.integration
 class TestSandboxSnapshotCommand:
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_snapshot(self, mock_run) -> None:
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-            _mock_run(),  # docker sandbox save
-        ]
-        result = runner.invoke(app, [
-            "sandbox", "snapshot", "my-box", "my-registry/snap:v1",
-        ])
-        assert result.exit_code == 0
-        assert "Snapshot saved" in result.output
+    @pytest.fixture(autouse=True)
+    def _require_runtime(self):
+        if not is_docker_available():
+            pytest.skip("No container runtime available")
 
-    @patch("sandboxer.core.docker.subprocess.run")
-    def test_snapshot_with_register(self, mock_run, tmp_path: Path) -> None:
-        mock_run.side_effect = [
-            _mock_run(),  # docker info
-            _mock_run(),  # docker sandbox --help
-            _mock_run(),  # docker sandbox save
-        ]
-        with patch("sandboxer.core.config.config_dir", return_value=tmp_path):
+    def test_snapshot(self) -> None:
+        from sandboxer.core.docker import create, remove
+
+        name = create("alpine:latest", name="sandboxer-test-cli-snap")
+        try:
             result = runner.invoke(app, [
-                "sandbox", "snapshot", "my-box", "my-registry/snap:v1",
-                "--register", "--as", "my-snap",
+                "sandbox", "snapshot", name, "sandboxer-test-snap:v1",
             ])
             assert result.exit_code == 0
-            assert "Registered template: my-snap" in result.output
+            assert "Snapshot saved" in result.output
+        finally:
+            try:
+                remove(name)
+            except Exception:
+                pass
+
+    def test_snapshot_with_register(self, tmp_path: Path) -> None:
+        from sandboxer.core.docker import create, remove
+
+        name = create("alpine:latest", name="sandboxer-test-cli-snap2")
+        try:
+            with patch("sandboxer.core.config.config_dir", return_value=tmp_path):
+                result = runner.invoke(app, [
+                    "sandbox", "snapshot", name, "sandboxer-test-snap:v2",
+                    "--register", "--as", "my-snap",
+                ])
+                assert result.exit_code == 0
+                assert "Registered template: my-snap" in result.output
+        finally:
+            try:
+                remove(name)
+            except Exception:
+                pass

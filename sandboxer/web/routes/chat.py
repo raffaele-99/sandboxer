@@ -15,7 +15,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from ...core.adapters import get_adapter
 from ...core.config import config_dir
-from ...core.docker import CONTAINER_WORKSPACE
+from ...core.docker import CONTAINER_WORKSPACE, get_runtime
 from ...core.sandboxes import list_running_sandboxes
 
 
@@ -124,13 +124,13 @@ def _build_agent_cmd(
     prompt: str,
     *,
     agent_session_id: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> list[str]:
-    """Build the docker exec command for an agent invocation."""
-    base = ["docker", "exec", "-w", CONTAINER_WORKSPACE, sandbox_name]
+    """Build the container exec command for an agent invocation."""
+    rt = get_runtime()
 
     if agent_type == "claude":
-        cmd = [
-            *base,
+        agent_cmd = [
             cli_binary,
             "-p",
             "--dangerously-skip-permissions",
@@ -138,31 +138,33 @@ def _build_agent_cmd(
             "--verbose",
         ]
         if agent_session_id:
-            cmd.extend(["--resume", agent_session_id])
-        cmd.append(prompt)
-        return cmd
+            agent_cmd.extend(["--resume", agent_session_id])
+        agent_cmd.append(prompt)
     elif agent_type == "codex":
         if agent_session_id:
-            return [
-                *base,
+            agent_cmd = [
                 cli_binary,
                 "exec", "resume", agent_session_id,
                 "--json",
                 "--dangerously-bypass-approvals-and-sandbox",
                 prompt,
             ]
-        return [
-            *base,
-            cli_binary,
-            "exec",
-            "--json",
-            "--dangerously-bypass-approvals-and-sandbox",
-            prompt,
-        ]
+        else:
+            agent_cmd = [
+                cli_binary,
+                "exec",
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox",
+                prompt,
+            ]
     elif agent_type == "gemini":
-        return [*base, cli_binary, "-p", prompt]
+        agent_cmd = [cli_binary, "-p", prompt]
     else:
-        return [*base, cli_binary, prompt]
+        agent_cmd = [cli_binary, prompt]
+
+    return rt.build_exec_command(
+        sandbox_name, agent_cmd, workdir=CONTAINER_WORKSPACE, env=env,
+    )
 
 
 def _extract_session_id(agent_type: str, line_data: dict) -> str | None:
@@ -295,23 +297,20 @@ async def chat_websocket(websocket: WebSocket) -> None:
             user_text = msg["message"]
             _append_message(name, "user", user_text, chat_state)
 
-            cmd = _build_agent_cmd(
-                name, adapter.agent_type, adapter.cli_binary, user_text,
-                agent_session_id=chat_state.get("agent_session_id"),
-            )
-
-            # Pass proxy env if available.
+            # Collect proxy env if available.
+            proxy_env: dict[str, str] | None = None
             try:
                 from ...core.sandboxes import _proxy_env
 
-                env = _proxy_env(name)
-                if env:
-                    idx = cmd.index(name)
-                    for key, value in env.items():
-                        cmd.insert(idx, f"{key}={value}")
-                        cmd.insert(idx, "-e")
+                proxy_env = _proxy_env(name) or None
             except Exception:
                 pass
+
+            cmd = _build_agent_cmd(
+                name, adapter.agent_type, adapter.cli_binary, user_text,
+                agent_session_id=chat_state.get("agent_session_id"),
+                env=proxy_env,
+            )
 
             assistant_text_parts: list[str] = []
 

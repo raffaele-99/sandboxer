@@ -1,6 +1,6 @@
 # sandboxer
 
-A Python CLI and library for managing Docker Sandbox environments for autonomous AI agents. Create reusable templates, manage agent profiles, and orchestrate sandboxed containers with credential proxying, resource monitoring, and auto-cleanup.
+A Python CLI and library for managing sandboxed container environments for autonomous AI agents. Supports both **Docker** and **Apple Containers** via [containerkit](https://github.com/raffaele-99/containerkit). Create reusable templates, manage agent profiles, and orchestrate sandboxed containers with credential proxying, resource monitoring, and auto-cleanup.
 
 ### Install
 
@@ -28,7 +28,7 @@ pip install -e ".[dev]"
 
 ### Prerequisites
 
-- Docker Desktop 4.58+ with `docker sandbox` support (`docker sandbox --help` must work).
+- A container runtime — either **Docker** or **Apple Containers** (macOS). The runtime is auto-detected; you can override with the `container_backend` config key.
 - **Option A — API keys** (recommended): set environment variables for the agents you use. The credential proxy will inject keys into requests so sandboxes never see raw credentials.
   - Claude: `ANTHROPIC_API_KEY`
   - Codex: `OPENAI_API_KEY`
@@ -69,7 +69,7 @@ sandboxer sandbox rm sandboxer-python-dev-my-claude-20260315120000
 | `sandbox ls` | List running sandboxer-managed sandboxes |
 | `sandbox shell <name>` | Open an interactive shell |
 | `sandbox stats <name>` | Show CPU, memory, network, and I/O usage |
-| `sandbox snapshot <name> <tag>` | Commit sandbox state as a Docker image |
+| `sandbox snapshot <name> <tag>` | Commit sandbox state as a container image |
 | `sandbox stop <name>` | Stop a sandbox |
 | `sandbox rm <name>` | Remove a sandbox |
 
@@ -95,7 +95,7 @@ Options for `sandbox snapshot`:
 | `template pull <registry-tag>` | Pull and register a template from a registry |
 
 Options for `template create`:
-- `-b, --base` — base Docker image (default: `docker/sandbox-templates:latest`)
+- `-b, --base` — base container image (default: `docker/sandbox-templates:latest`)
 - `-d, --desc` — description
 - `-p, --package` — OS package to install (repeatable)
 - `--pip` — pip package to install (repeatable)
@@ -149,20 +149,24 @@ Config is stored at `~/.config/sandboxer/config.yml`. Supported keys:
 | `default_agent` | `null` | Agent profile to use when none specified |
 | `credential_proxy_port` | `9876` | Starting port for credential proxies |
 | `auto_cleanup_orphans` | `true` | Auto-remove stopped sandboxes |
-| `network_mode` | `bridge` | Default Docker network mode |
+| `network_mode` | `bridge` | Default network mode |
+| `container_backend` | `auto` | Container runtime: `auto`, `docker`, or `apple` |
+| `container_runtime` | `runsc` | OCI runtime for gVisor isolation (Docker only, falls back gracefully) |
 | `default_ttl_seconds` | `null` | Default TTL for new sandboxes |
 | `default_idle_timeout_seconds` | `null` | Default idle timeout for new sandboxes |
 
 ### Features
 
+- **Multi-runtime** — supports Docker and Apple Containers via [containerkit](https://github.com/raffaele-99/containerkit), with automatic detection
 - **Templates** — reusable sandbox definitions with OS packages, pip/npm deps, and custom Dockerfile lines
 - **Agent adapters** — built-in install snippets for Claude, Codex, and Gemini
 - **Credential proxy** — host-side HTTP proxy injects API keys so sandboxes never see real credentials
-- **Resource monitoring** — `docker stats` integration for CPU, memory, network, and I/O
+- **Resource monitoring** — container stats integration for CPU, memory, network, and I/O
 - **Snapshots** — commit a running sandbox as a reusable image
 - **Template marketplace** — push/pull templates to/from OCI registries
 - **Auto-cleanup** — TTL and idle-timeout policies with metadata tracking
 - **Mount allowlist** — block sensitive host paths (`.ssh`, `.aws`, `.gnupg`, etc.)
+- **gVisor isolation** — optional `runsc` runtime for syscall-level sandboxing (Docker only)
 
 ### Auth directory mount
 
@@ -183,9 +187,9 @@ When `--auth-dir` is set and no API key env var is configured, the credential pr
 ### Development
 
 ```bash
-# Run all unit tests
-pytest tests/ -v
+# Run unit tests (no container runtime needed)
+uv run --extra dev python -m pytest tests/ -v -m "not integration"
 
-# Run integration tests (requires Docker Desktop with sandbox support)
-pytest tests/ -v -m integration
+# Run integration tests (requires Docker or Apple Containers)
+uv run --extra dev python -m pytest tests/ -v -m integration
 ```

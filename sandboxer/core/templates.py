@@ -67,6 +67,17 @@ def render_dockerfile(template: SandboxTemplate) -> str:
     """Generate a Dockerfile from a template definition."""
     lines: list[str] = [f"FROM {template.base_image}", ""]
 
+    # Check if we need any install steps that require root.
+    needs_root = bool(
+        template.packages
+        or template.pip_packages
+        or template.npm_packages
+        or template.agent_type
+    )
+    if needs_root:
+        lines.append("USER root")
+        lines.append("")
+
     if template.packages:
         pkg_str = " ".join(template.packages)
         lines.append(

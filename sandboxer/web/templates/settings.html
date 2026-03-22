@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Settings — Sandboxer{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold text-white">Settings</h1>
+    <p class="text-sm text-slate-400 mt-1">Global configuration for Sandboxer</p>
+  </div>
+
+  <form hx-put="/settings" hx-swap="none" hx-disabled-elt="find button[type='submit']"
+        class="bg-slate-800 rounded-xl border border-slate-700 p-6 space-y-6">
+
+    <!-- Defaults -->
+    <div>
+      <h2 class="text-sm font-semibold text-slate-300 mb-4">Defaults</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label for="default_template" class="block text-xs text-slate-400 mb-1.5">Default Template</label>
+          <input type="text" id="default_template" name="default_template"
+                 value="{{ config.default_template or '' }}" placeholder="None"
+                 class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+        </div>
+        <div>
+          <label for="default_agent" class="block text-xs text-slate-400 mb-1.5">Default Agent</label>
+          <input type="text" id="default_agent" name="default_agent"
+                 value="{{ config.default_agent or '' }}" placeholder="None"
+                 class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+        </div>
+      </div>
+    </div>
+
+    <!-- Container Runtime -->
+    <div class="pt-2 border-t border-slate-700">
+      <h2 class="text-sm font-semibold text-slate-300 mb-4">Container Runtime</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label for="container_backend" class="block text-xs text-slate-400 mb-1.5">Container Backend</label>
+          <select id="container_backend" name="container_backend"
+                  class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+            <option value="auto" {% if config.container_backend == 'auto' %}selected{% endif %}>Auto-detect</option>
+            <option value="docker" {% if config.container_backend == 'docker' %}selected{% endif %}>Docker</option>
+            <option value="apple" {% if config.container_backend == 'apple' %}selected{% endif %}>Apple Containers</option>
+          </select>
+        </div>
+        <div>
+          <label for="container_runtime" class="block text-xs text-slate-400 mb-1.5">OCI Runtime</label>
+          <select id="container_runtime" name="container_runtime"
+                  class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+            <option value="runsc" {% if config.container_runtime == 'runsc' %}selected{% endif %}>gVisor (runsc)</option>
+            <option value="" {% if not config.container_runtime %}selected{% endif %}>Default</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">Docker only, falls back gracefully</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Network & Proxy -->
+    <div class="pt-2 border-t border-slate-700">
+      <h2 class="text-sm font-semibold text-slate-300 mb-4">Network & Proxy</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label for="network_mode" class="block text-xs text-slate-400 mb-1.5">Default Network Mode</label>
+          <select id="network_mode" name="network_mode"
+                  class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+            <option value="bridge" {% if config.network_mode == 'bridge' %}selected{% endif %}>Bridge</option>
+            <option value="none" {% if config.network_mode == 'none' %}selected{% endif %}>None</option>
+            <option value="host" {% if config.network_mode == 'host' %}selected{% endif %}>Host</option>
+          </select>
+        </div>
+        <div>
+          <label for="credential_proxy_port" class="block text-xs text-slate-400 mb-1.5">Credential Proxy Port</label>
+          <input type="number" id="credential_proxy_port" name="credential_proxy_port"
+                 value="{{ config.credential_proxy_port }}" min="1024" max="65535"
+                 class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+        </div>
+        <div>
+          <label for="dns_server" class="block text-xs text-slate-400 mb-1.5">DNS Server</label>
+          <input type="text" id="dns_server" name="dns_server"
+                 value="{{ config.dns_server or '' }}" placeholder="e.g. 8.8.8.8"
+                 class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent font-mono">
+          <p class="text-xs text-slate-500 mt-1">Override container DNS. Useful when VPN breaks gateway DNS resolution.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cleanup -->
+    <div class="pt-2 border-t border-slate-700">
+      <h2 class="text-sm font-semibold text-slate-300 mb-4">Cleanup</h2>
+      <div class="space-y-4">
+        <label class="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+          <input type="checkbox" name="auto_cleanup_orphans" value="true"
+                 {% if config.auto_cleanup_orphans %}checked{% endif %}
+                 class="w-4 h-4 rounded bg-slate-700 border-slate-600 text-cyan-500 focus:ring-cyan-500">
+          Auto-cleanup orphaned containers
+        </label>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="default_ttl_seconds" class="block text-xs text-slate-400 mb-1.5">Default TTL (seconds)</label>
+            <input type="number" id="default_ttl_seconds" name="default_ttl_seconds"
+                   value="{{ config.default_ttl_seconds or '' }}" min="0" placeholder="No limit"
+                   class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+          </div>
+          <div>
+            <label for="default_idle_timeout_seconds" class="block text-xs text-slate-400 mb-1.5">Default Idle Timeout (seconds)</label>
+            <input type="number" id="default_idle_timeout_seconds" name="default_idle_timeout_seconds"
+                   value="{{ config.default_idle_timeout_seconds or '' }}" min="0" placeholder="No limit"
+                   class="w-full bg-slate-700 border border-slate-600 text-white text-sm rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pt-2">
+      <button type="submit"
+              class="w-full sm:w-auto px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors min-h-[44px]">
+        Save Settings
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

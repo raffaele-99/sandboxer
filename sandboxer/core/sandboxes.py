@@ -11,8 +11,10 @@ from .docker import (
     LABEL_AGENT,
     LABEL_TEMPLATE,
     LABEL_WORKSPACE,
+    build_template as docker_build,
     create as docker_create,
     exec_shell as docker_exec_shell,
+    get_runtime,
     is_gvisor_available,
     list_sandboxes as docker_list,
     remove as docker_remove,
@@ -21,16 +23,7 @@ from .docker import (
     stop as docker_stop,
 )
 from .models import AgentProfile, SandboxInfo, SandboxStats, SandboxTemplate
-
-
-# Default agent-type → image mapping (Docker sandbox-templates images).
-_DEFAULT_IMAGES: dict[str, str] = {
-    "claude": "docker/sandbox-templates:claude",
-    "codex": "docker/sandbox-templates:codex",
-    "gemini": "docker/sandbox-templates:gemini",
-    "shell": "docker/sandbox-templates:shell",
-}
-_FALLBACK_IMAGE = "docker/sandbox-templates:latest"
+from .templates import render_dockerfile
 
 
 def _sandbox_name(template: str, agent: str) -> str:
@@ -38,15 +31,47 @@ def _sandbox_name(template: str, agent: str) -> str:
     return f"{SANDBOX_NAME_PREFIX}{template}-{agent}-{ts}"
 
 
-def _resolve_image(template: SandboxTemplate, agent: AgentProfile) -> str:
-    """Pick the container image to use.
+def _build_image(
+    template: SandboxTemplate,
+    agent: AgentProfile,
+    *,
+    dns: str | None = None,
+) -> str:
+    """Build the template Dockerfile and return the image tag.
 
-    If the template specifies a non-default base_image, use that.
-    Otherwise map the agent type to the matching sandbox-templates tag.
+    If the template doesn't specify an agent_type but the agent profile
+    does, the agent's type is used so the agent CLI gets installed.
+
+    If no customizations are needed, the base image is returned directly.
     """
-    if template.base_image != "docker/sandbox-templates:latest":
-        return template.base_image
-    return _DEFAULT_IMAGES.get(agent.agent_type, _FALLBACK_IMAGE)
+    # Use the agent's type if the template doesn't specify one.
+    effective_template = template
+    if not template.agent_type and agent.agent_type:
+        effective_template = template.model_copy(
+            update={"agent_type": agent.agent_type}
+        )
+
+    needs_build = bool(
+        effective_template.packages
+        or effective_template.pip_packages
+        or effective_template.npm_packages
+        or effective_template.agent_type
+        or effective_template.custom_dockerfile_lines
+    )
+    if not needs_build:
+        return effective_template.base_image
+
+    import tempfile
+
+    tag = f"sandboxer/{template.name}-{agent.agent_type}:latest"
+    dockerfile_content = render_dockerfile(effective_template)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        df_path = Path(tmpdir) / "Dockerfile"
+        df_path.write_text(dockerfile_content)
+        docker_build(str(df_path), tag, context_dir=tmpdir, dns=dns)
+
+    return tag
 
 
 def create_sandbox(
@@ -63,7 +88,7 @@ def create_sandbox(
     config = config or GlobalConfig.load()
     sandbox_name = name or _sandbox_name(template.name, agent.name)
 
-    image = _resolve_image(template, agent)
+    image = _build_image(template, agent, dns=config.dns_server)
 
     # Build volume mounts: workspace + optional auth dir.
     volumes: dict[str, str] = {}
@@ -85,9 +110,17 @@ def create_sandbox(
         LABEL_WORKSPACE: resolved_workspace,
     }
 
-    # Use gVisor if available, otherwise fall back to default runtime.
+    # Initialize the container backend from config if not already set.
+    import containerkit
+    from .docker import _runtime as _current_runtime
+    if _current_runtime is None:
+        import sandboxer.core.docker as _docker_mod
+        _docker_mod._runtime = containerkit.resolve(config.container_backend)
+
+    # Use gVisor if available (Docker only), otherwise fall back to default runtime.
+    rt = get_runtime()
     runtime = config.container_runtime
-    if runtime == "runsc" and not is_gvisor_available():
+    if runtime == "runsc" and (rt.name != "docker" or not is_gvisor_available()):
         runtime = None
 
     docker_create(
@@ -97,6 +130,7 @@ def create_sandbox(
         labels=labels,
         runtime=runtime,
         network=template.network if template.network != "bridge" else None,
+        dns=config.dns_server,
     )
 
     # Start credential proxy (best-effort).

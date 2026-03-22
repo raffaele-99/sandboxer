@@ -19,6 +19,17 @@ from ...core.sandboxes import (
 from ...core.templates import list_templates, load_template
 
 
+def _error_response(msg: str) -> Response:
+    """Return a 422 with a toast error message."""
+    import json
+
+    response = Response(status_code=422)
+    response.headers["HX-Trigger"] = json.dumps(
+        {"showToast": {"message": msg, "level": "error"}}
+    )
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Full pages
 # ---------------------------------------------------------------------------
@@ -58,19 +69,7 @@ async def sandbox_create(request: Request) -> Response:
     idle_timeout = form.get("idle_timeout", "").strip()
 
     if not template_name or not agent_name:
-        templates, agents = await asyncio.gather(
-            asyncio.to_thread(list_templates),
-            asyncio.to_thread(list_agents),
-        )
-        return request.app.state.templates.TemplateResponse(
-            request,
-            "sandboxes/create.html",
-            {
-                "templates": templates,
-                "agents": agents,
-                "error": "Template and agent are required.",
-            },
-        )
+        return _error_response("Template and agent are required.")
 
     try:
         template = await asyncio.to_thread(load_template, template_name)
@@ -86,19 +85,7 @@ async def sandbox_create(request: Request) -> Response:
             create_sandbox, template, agent, **kwargs
         )
     except Exception as exc:
-        templates, agents = await asyncio.gather(
-            asyncio.to_thread(list_templates),
-            asyncio.to_thread(list_agents),
-        )
-        return request.app.state.templates.TemplateResponse(
-            request,
-            "sandboxes/create.html",
-            {
-                "templates": templates,
-                "agents": agents,
-                "error": str(exc),
-            },
-        )
+        return _error_response(str(exc))
 
     response = Response(status_code=204)
     response.headers["HX-Redirect"] = f"/sandboxes/{info.name}"

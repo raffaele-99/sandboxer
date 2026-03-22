@@ -64,6 +64,15 @@ wheels = [
 ]
 
 [[package]]
+name = "containerkit"
+version = "0.1.0"
+source = { editable = "../containerkit" }
+
+[package.metadata]
+requires-dist = [{ name = "docker", marker = "extra == 'api'", specifier = ">=7.0" }]
+provides-extras = ["api"]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -507,6 +516,7 @@ name = "sandboxer"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "containerkit" },
     { name = "jinja2" },
     { name = "pydantic" },
     { name = "python-multipart" },
@@ -528,6 +538,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "containerkit", editable = "../containerkit" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
