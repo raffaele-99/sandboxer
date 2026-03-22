@@ -11,6 +11,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from ...core.adapters import get_adapter
+from ...core.docker import CONTAINER_HOME
 from ...core.sandboxes import list_running_sandboxes
 
 
@@ -73,11 +74,12 @@ async def terminal_websocket(websocket: WebSocket) -> None:
             if adapter and adapter.cli_binary:
                 command = [adapter.cli_binary] + list(adapter.auto_args)
 
-        # Pass proxy env vars if available.
+        # Ensure agent CLI finds auth/config mounted at CONTAINER_HOME.
+        env = {"HOME": CONTAINER_HOME}
         try:
             from ...core.sandboxes import _proxy_env
 
-            env = _proxy_env(name) or None
+            env.update(_proxy_env(name))
         except Exception:
             pass
 

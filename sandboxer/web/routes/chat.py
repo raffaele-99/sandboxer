@@ -15,7 +15,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from ...core.adapters import get_adapter
 from ...core.config import config_dir
-from ...core.docker import CONTAINER_WORKSPACE, get_runtime
+from ...core.docker import CONTAINER_HOME, CONTAINER_WORKSPACE, get_runtime
 from ...core.sandboxes import list_running_sandboxes
 
 
@@ -297,19 +297,20 @@ async def chat_websocket(websocket: WebSocket) -> None:
             user_text = msg["message"]
             _append_message(name, "user", user_text, chat_state)
 
-            # Collect proxy env if available.
-            proxy_env: dict[str, str] | None = None
+            # Ensure agent CLI finds auth/config mounted at CONTAINER_HOME,
+            # even when the container runs as root (HOME=/root).
+            exec_env: dict[str, str] = {"HOME": CONTAINER_HOME}
             try:
                 from ...core.sandboxes import _proxy_env
 
-                proxy_env = _proxy_env(name) or None
+                exec_env.update(_proxy_env(name))
             except Exception:
                 pass
 
             cmd = _build_agent_cmd(
                 name, adapter.agent_type, adapter.cli_binary, user_text,
                 agent_session_id=chat_state.get("agent_session_id"),
-                env=proxy_env,
+                env=exec_env,
             )
 
             assistant_text_parts: list[str] = []

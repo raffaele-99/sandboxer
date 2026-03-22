@@ -65,24 +65,29 @@ def list_templates(base: Path | None = None) -> list[SandboxTemplate]:
 
 def render_dockerfile(template: SandboxTemplate) -> str:
     """Generate a Dockerfile from a template definition."""
+    from .docker import CONTAINER_HOME, CONTAINER_WORKSPACE
+
     lines: list[str] = [f"FROM {template.base_image}", ""]
 
-    # Check if we need any install steps that require root.
-    needs_root = bool(
-        template.packages
-        or template.pip_packages
-        or template.npm_packages
-        or template.agent_type
-    )
-    if needs_root:
-        lines.append("USER root")
-        lines.append("")
+    # All installation happens as root.
+    lines.append("USER root")
+    lines.append("")
 
-    if template.packages:
-        pkg_str = " ".join(template.packages)
+    # Create the non-root agent user and workspace directory.
+    sudo_pkg = " sudo" if template.allow_sudo else ""
+    lines.append(
+        f"RUN groupadd -r agent && useradd -r -g agent -m -d {CONTAINER_HOME} -s /bin/bash agent"
+        f" && mkdir -p {CONTAINER_WORKSPACE} && chown agent:agent {CONTAINER_WORKSPACE}"
+    )
+    if template.allow_sudo:
+        lines.append("RUN echo 'agent ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers")
+    lines.append("")
+
+    if template.packages or sudo_pkg:
+        pkg_str = " ".join(template.packages) + sudo_pkg
         lines.append(
             f"RUN apt-get update && DEBIAN_FRONTEND=noninteractive "
-            f"apt-get install -y --no-install-recommends {pkg_str} "
+            f"apt-get install -y --no-install-recommends {pkg_str.strip()} "
             f"&& rm -rf /var/lib/apt/lists/*"
         )
         lines.append("")
@@ -111,6 +116,11 @@ def render_dockerfile(template: SandboxTemplate) -> str:
         lines.append(custom_line)
     if template.custom_dockerfile_lines:
         lines.append("")
+
+    # Switch to the agent user for runtime.
+    lines.append(f"USER agent")
+    lines.append(f"WORKDIR {CONTAINER_WORKSPACE}")
+    lines.append("")
 
     return "\n".join(lines)
 

@@ -1,14 +1,27 @@
 """Core data models backed by pydantic."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
 
 class SandboxTemplate(BaseModel):
     name: str
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not _SAFE_NAME_RE.match(v):
+            raise ValueError(
+                "Template name must contain only alphanumeric characters, "
+                "hyphens, and underscores, and must start with an alphanumeric character."
+            )
+        return v
     description: str = ""
     base_image: str = "docker/sandbox-templates:latest"
     packages: list[str] = Field(default_factory=list)

@@ -238,8 +238,9 @@ def shell_into(name: str) -> None:
         touch_activity(name)
     except Exception:
         pass
-    env = _proxy_env(name)
-    docker_exec_shell(name, env=env if env else None, workdir=CONTAINER_WORKSPACE)
+    env = {"HOME": CONTAINER_HOME}
+    env.update(_proxy_env(name))
+    docker_exec_shell(name, env=env, workdir=CONTAINER_WORKSPACE)
 
 
 def get_sandbox_stats(name: str) -> SandboxStats:
