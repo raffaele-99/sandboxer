@@ -13,23 +13,7 @@ Right now, it supports:
 
 ### Why
 
-I primarily use terminal agents as a faster way of extending scripts that I've written. While I definitely found their results to be better/more in-depth, I noticed that I was actually taking longer than before to produce the same work; this is apparently a [documented thing](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/). In my case, I wasn't specifically tracking why I was taking longer, but I'm assuming it's because the agents have to keep asking for approval to perform each task.
-
-> *"Can I view the contents of this directory?"* *"Can I check what packages you have installed?"* Yes dude, do whatever you need to finish the Python script. You can put music on if you want, I don't care. Tool call web search for pictures of Owen Wilson, put his face on The Death Of Julius Caesar, go nuts. You're only modifying the contents of this one Python script, so I don't care what web requests you make or what temporary directories you create.
-
-I started using [docker sandbox](https://docs.docker.com/ai/sandboxes/) to give agents their own "host" where they have full permissions - modify files, sudo privileges for tool installs, perform web searches, etc - and I have found that this works much better. I create the sandbox, give the agent my starting script, and ask it to work until all the desired functions are achieved. Then I continue my own work in the meantime and come back 10-20 minutes later to a (usually) fleshed-out script.
-
-**Control.** This project actually started as a wrapper around `docker sandbox`, but I kept hitting walls. The CLI has a rigid, opinionated interface — no `--network` flag, no env var passthrough, no control over volume mounts. That last one was the dealbreaker: I needed to mount agent auth directories (like `~/.codex`) into containers, control which host paths are exposed, and optionally mount workspaces as read-only. `docker sandbox` just doesn't bend that way. So I replaced it with plain `docker run` (with optional gVisor isolation), and later abstracted the runtime entirely via [pycontainer](https://github.com/raffaele-99/pycontainer) to support Apple Containers too.
-
-**Credential isolation.** `docker sandbox` doesn't have an opinion about how your agent authenticates — your API key typically ends up as an env var inside the container, where any code the agent runs can read it. `sandboxer` runs a host-side credential proxy that intercepts API calls and injects auth headers on the fly. The key never enters the container.
-
-**Templates and reproducibility.** `docker sandbox` gives you a one-off environment. If you want "Python 3.12 with pytest, git, and Claude pre-installed" as a thing you can spin up repeatedly, you're back to managing Dockerfiles yourself. `sandboxer` templates capture all of that — OS packages, pip/npm deps, agent type — in a single config you can version, share, and push to a registry.
-
-**Multi-agent, multi-runtime.** If you're comparing Claude, Codex, and Gemini on the same task, `sandboxer` handles the differences for you — different CLI invocations, different streaming formats, different install steps. It also works with Apple Containers on macOS, not just Docker.
-
-**Lifecycle management.** TTL policies, idle timeouts, orphan cleanup, resource monitoring, snapshots — the kind of stuff you end up scripting around `docker sandbox` once you have more than a couple of environments running.
-
-None of this means `docker sandbox` is bad. It's more that `sandboxer` is what you reach for when you're running agents regularly and want guardrails that go beyond "here's a container."
+its more swag
 
 ## Usage
 
