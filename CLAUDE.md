@@ -35,7 +35,7 @@ Three-layer design: **CLI** (`cli.py`) → **Core** (`core/`) → **Web** (`web/
 Stateless functions organized by concern. All state lives in YAML/JSON files under `~/.config/sandboxer/`.
 
 - **models.py** — Pydantic models: `SandboxTemplate`, `AgentProfile`, `SandboxInfo`, `SandboxStats`
-- **docker.py** — Container management via [containerkit](https://github.com/raffaele-99/containerkit), a runtime-agnostic abstraction supporting both Docker and Apple Containers. Uses `containerkit.resolve()` for auto-detection, `Runtime.build_exec_command()` / `Runtime.run()` for operations, and `Mount`/`RunOptions` for portable configuration. Labels (`sandboxer.managed`, `sandboxer.agent`, etc.) track containers. Containers run `sleep infinity` as entrypoint; agent CLIs are invoked via exec. The `get_runtime()` function exposes the resolved `containerkit.Runtime` instance.
+- **docker.py** — Container management via [pycontainer](https://github.com/raffaele-99/pycontainer), a runtime-agnostic abstraction supporting both Docker and Apple Containers. Uses `pycontainer.resolve()` for auto-detection, `Runtime.build_exec_command()` / `Runtime.run()` for operations, and `Mount`/`RunOptions` for portable configuration. Labels (`sandboxer.managed`, `sandboxer.agent`, etc.) track containers. Containers run `sleep infinity` as entrypoint; agent CLIs are invoked via exec. The `get_runtime()` function exposes the resolved `pycontainer.Runtime` instance.
 - **sandboxes.py** — Orchestrates sandbox creation: resolves image from template+agent, builds volume mounts, starts credential proxy, saves metadata. Entry point: `create_sandbox()`.
 - **adapters.py** — Maps agent types (claude/codex/gemini) to CLI binaries and Dockerfile install snippets.
 - **credential_proxy.py** — Asyncio HTTP proxy that intercepts requests to AI API endpoints and injects auth headers from host env vars. Sandboxes never see raw API keys.
@@ -47,7 +47,7 @@ Starlette + Jinja2 + HTMX. No SPA framework. Tailwind CSS via CDN (dark theme).
 
 - **app.py** — `create_app()` factory, mounts all route modules, sets up Jinja2 templates and static files.
 - **auth.py** — `TokenAuthMiddleware` checks bearer token, cookie, or `?token=` query param. Exempts `/static/*`.
-- **terminal.py** — `TerminalSession` opens a real PTY via `containerkit.Runtime.build_exec_command()`, bridged to WebSocket for Xterm.js. Uses a dedicated 16-thread executor for PTY I/O.
+- **terminal.py** — `TerminalSession` opens a real PTY via `pycontainer.Runtime.build_exec_command()`, bridged to WebSocket for Xterm.js. Uses a dedicated 16-thread executor for PTY I/O.
 - **routes/chat.py** — Multi-session chat. Stores sessions as JSON in `~/.config/sandboxer/chat_sessions/{sandbox}/{session_id}.json`. WebSocket handler spawns agent CLI subprocess per message, streams structured JSON (Claude stream-json or Codex JSONL) back to the browser.
 
 ### Route pattern
@@ -63,7 +63,7 @@ HTMX partials live in `templates/partials/` and are returned from dedicated endp
 
 ### Agent CLI bridging (chat)
 
-The chat WebSocket bridges messages to agent CLIs running inside containers via `containerkit.Runtime.build_exec_command()`:
+The chat WebSocket bridges messages to agent CLIs running inside containers via `pycontainer.Runtime.build_exec_command()`:
 - **Claude**: `<runtime> exec <name> claude -p --output-format stream-json --resume <session_id> <prompt>`
 - **Codex**: `<runtime> exec <name> codex exec [resume <session_id>] --json --dangerously-bypass-approvals-and-sandbox <prompt>`
 
@@ -71,7 +71,7 @@ Session IDs are extracted from the first response (`system.session_id` for Claud
 
 ### Container setup
 
-Containers use containerkit's `Runtime.run()` (which maps to `docker run` or `container run` depending on the detected runtime) with optional `--runtime=runsc` for gVisor syscall isolation (Docker only). Volumes are represented as `containerkit.Mount` objects with automatic syntax translation between runtimes. Default images come from `docker/sandbox-templates:{agent_type}`.
+Containers use pycontainer's `Runtime.run()` (which maps to `docker run` or `container run` depending on the detected runtime) with optional `--runtime=runsc` for gVisor syscall isolation (Docker only). Volumes are represented as `pycontainer.Mount` objects with automatic syntax translation between runtimes. Default images come from `docker/sandbox-templates:{agent_type}`.
 
 ## Testing
 

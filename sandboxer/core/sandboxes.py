@@ -111,11 +111,11 @@ def create_sandbox(
     }
 
     # Initialize the container backend from config if not already set.
-    import containerkit
+    import pycontainer
     from .docker import _runtime as _current_runtime
     if _current_runtime is None:
         import sandboxer.core.docker as _docker_mod
-        _docker_mod._runtime = containerkit.resolve(config.container_backend)
+        _docker_mod._runtime = pycontainer.resolve(config.container_backend)
 
     # Use gVisor if available (Docker only), otherwise fall back to default runtime.
     rt = get_runtime()

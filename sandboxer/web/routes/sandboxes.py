@@ -216,11 +216,11 @@ async def sandbox_create_events(request: Request) -> StreamingResponse:
                 LABEL_WORKSPACE: resolved_workspace,
             }
 
-            import containerkit
+            import pycontainer
             from ...core.docker import _runtime as _current_runtime
             if _current_runtime is None:
                 import sandboxer.core.docker as _docker_mod
-                _docker_mod._runtime = containerkit.resolve(config.container_backend)
+                _docker_mod._runtime = pycontainer.resolve(config.container_backend)
 
             rt = get_runtime()
             runtime = config.container_runtime

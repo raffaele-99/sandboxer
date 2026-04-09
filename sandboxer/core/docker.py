@@ -1,4 +1,4 @@
-"""Container management — uses containerkit for runtime-agnostic operations."""
+"""Container management — uses pycontainer for runtime-agnostic operations."""
 from __future__ import annotations
 
 import json
@@ -6,8 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 
-import containerkit
-from containerkit import Mount, RunOptions, Runtime
+import pycontainer
+from pycontainer import Mount, RunOptions, Runtime
 
 # Labels used to identify and query sandboxer-managed containers.
 LABEL_MANAGED = "sandboxer.managed"
@@ -24,10 +24,10 @@ _runtime: Runtime | None = None
 
 
 def get_runtime() -> Runtime:
-    """Get or initialize the containerkit runtime."""
+    """Get or initialize the pycontainer runtime."""
     global _runtime
     if _runtime is None:
-        _runtime = containerkit.resolve()
+        _runtime = pycontainer.resolve()
     return _runtime
 
 
@@ -144,7 +144,7 @@ def create(
     """
     rt = get_runtime()
 
-    # Convert volume dict to containerkit Mount objects.
+    # Convert volume dict to pycontainer Mount objects.
     mounts: list[Mount] = []
     if volumes:
         for host_path, container_path in volumes.items():
@@ -382,7 +382,7 @@ def sandbox_exists(name: str) -> bool:
 
 def is_docker_available() -> bool:
     """Return True if a container runtime is available."""
-    return containerkit.detect() is not None
+    return pycontainer.detect() is not None
 
 
 def is_gvisor_available() -> bool:
